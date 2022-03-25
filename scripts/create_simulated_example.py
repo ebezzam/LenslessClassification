@@ -3,17 +3,17 @@ Convolve with a PSF. Use `--down_out` to set output size.
 
 Convolve with lens PSF
 ```
-python scripts/create_augmented_example.py --psf psfs/lens.png --crop_output
+python scripts/create_simulated_example.py --psf psfs/lens.png --crop_output
 ```
 
 With lensless PSF (tape)
 ```
-
+python scripts/create_simulated_example.py --psf psfs/tape.png
 ```
 
 With lensless PSF (SLM)
 ```
-python scripts/create_augmented_example.py --psf psfs/adafruit.png
+python scripts/create_simulated_example.py --psf psfs/adafruit.png
 ```
 
 TODO : plot with dimensions
@@ -69,7 +69,7 @@ from lensless.io import load_psf
     is_flag=True,
     help="Whether to normalize simulation plot.",
 )
-def create_augmented_example(
+def create_simulated_example(
     psf, idx, down_psf, down_out, gamma, single_psf, rgb, crop_output, normalize_plot
 ):
     assert psf is not None
@@ -153,4 +153,4 @@ def create_augmented_example(
 
 
 if __name__ == "__main__":
-    create_augmented_example()
+    create_simulated_example()

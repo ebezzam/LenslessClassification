@@ -3,12 +3,41 @@ from lensless.util import resize, rgb2gray
 import cv2
 import torch
 from torchvision import transforms, datasets
+from torch.utils.data import Dataset
 import numpy as np
+import os
+import glob
 from lenslessclass.util import RealFFTConvolve2D
 
 
 # TODO : abstract parent class for DatasetPropagated
 # TODO : take into account FOV and offset
+
+
+class MNISTAugmented(Dataset):
+    def __init__(self, path, train=True):
+        self._path = path
+        if train:
+            self._subdir = os.path.join(path, "train")
+        else:
+            self._subdir = os.path.join(path, "test")
+        self._n_files = len(glob.glob(os.path.join(self._subdir, "img*")))
+        n_labels = len(glob.glob(os.path.join(self._subdir, "label*")))
+        assert self._n_files == n_labels
+        self._labels = []
+        for i in range(n_labels):
+            label_path = os.path.join(self._subdir, f"label{i}")
+            self._labels.append(torch.load(label_path))
+
+    def __getitem__(self, index):
+
+        img_path = os.path.join(self._subdir, f"img{index}")
+        img_tensor = torch.load(img_path)
+
+        return img_tensor, self._labels[index]
+
+    def __len__(self):
+        return self._n_files
 
 
 class MNISTPropagated(datasets.MNIST):
@@ -34,7 +63,7 @@ class MNISTPropagated(datasets.MNIST):
         scale=(1, 1),
         dtype=np.float32,
         dtype_out=torch.uint8,  # simulate quantization of sensor
-        **kwargs
+        **kwargs,
     ):
 
         self.dtype_out = dtype_out
