@@ -23,7 +23,7 @@ python scripts/train_logistic_reg.py --dataset data/MNIST_tape_down128
 
 SLM
 ```
-python scripts/train_logistic_reg.py --dataset data/MNIST_fixedslm_down128
+python scripts/train_logistic_reg.py --dataset data/MNIST_adafruit_down128
 ```
 
 
