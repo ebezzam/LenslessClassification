@@ -20,6 +20,7 @@ python scripts/load_simulated_dataset.py --dataset data/MNIST_fixedslm_down128
 
 import numpy as np
 import click
+import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 from lensless.plot import plot_image
 from lenslessclass.datasets import MNISTAugmented
@@ -51,8 +52,15 @@ from lenslessclass.datasets import MNISTAugmented
 def load_simulated_dataset(dataset, test, idx, gamma, normalize_plot):
 
     # -- load dataset
-    ds = MNISTAugmented(path=dataset, train=not test)
+    # scale between [0, 1] to convert numpy array into torch tensors
+    trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize(0, 1)])
+    ds = MNISTAugmented(path=dataset, train=not test, transform=trans)
     print("Number of examples :", len(ds))
+
+    # -- get statistics
+    mean, std = ds.get_stats()
+    print("Dataset mean : ", mean)
+    print("Dataset standard deviation : ", std)
 
     # -- check one file
     input_image, label = ds[idx]

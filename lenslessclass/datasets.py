@@ -2,6 +2,7 @@ from lensless.io import load_psf
 from lensless.util import resize, rgb2gray
 import cv2
 import torch
+from PIL import Image
 from torchvision import transforms, datasets
 from torch.utils.data import Dataset
 import numpy as np
@@ -15,26 +16,57 @@ from lenslessclass.util import RealFFTConvolve2D
 
 
 class MNISTAugmented(Dataset):
-    def __init__(self, path, train=True):
+    def __init__(self, path, train=True, transform=None, dtype=torch.float32):
         self._path = path
         if train:
             self._subdir = os.path.join(path, "train")
         else:
             self._subdir = os.path.join(path, "test")
-        self._n_files = len(glob.glob(os.path.join(self._subdir, "img*")))
-        n_labels = len(glob.glob(os.path.join(self._subdir, "label*")))
-        assert self._n_files == n_labels
-        self._labels = []
-        for i in range(n_labels):
-            label_path = os.path.join(self._subdir, f"label{i}")
-            self._labels.append(torch.load(label_path))
+        self._n_files = len(glob.glob(os.path.join(self._subdir, "img*.png")))
+
+        with open(os.path.join(self._subdir, "labels.txt")) as f:
+            self._labels = [int(i) for i in f]
+        assert self._n_files == len(self._labels)
+
+        self.transform = transform
+        self.dtype = dtype
+
+        # get output shape
+        img = Image.open(glob.glob(os.path.join(self._subdir, "img*"))[0])
+        # horizontal and vertical size in pixels, whereas PyTorch expects (height, width)
+        self.output_dim = np.array(img.size).T
+
+    def get_stats(self):
+        """
+        Get mean and standard deviation.
+
+        Example: https://kozodoi.me/python/deep%20learning/pytorch/tutorial/2021/03/08/image-mean-std.html
+
+        TODO : in batches for faster implementation?
+        """
+        psum = 0
+        psum_sq = 0
+        for i in range(self._n_files):
+            img = self[i][0]
+            psum += img.sum()
+            psum_sq += (img**2).sum()
+
+        count = self._n_files * np.prod(self.output_dim)
+        total_mean = psum / count
+        total_var = (psum_sq / count) - (total_mean**2)
+        total_std = np.sqrt(total_var)
+
+        return total_mean.item(), total_std.item()
 
     def __getitem__(self, index):
 
-        img_path = os.path.join(self._subdir, f"img{index}")
-        img_tensor = torch.load(img_path)
+        img_path = os.path.join(self._subdir, f"img{index}.png")
+        img = Image.open(img_path)
 
-        return img_tensor, self._labels[index]
+        if self.transform:
+            img = self.transform(img)
+
+        return img, self._labels[index]
 
     def __len__(self):
         return self._n_files

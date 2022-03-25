@@ -24,6 +24,7 @@ import numpy as np
 import pathlib as plib
 import torch
 import os
+from PIL import Image
 from lenslessclass.datasets import MNISTPropagated
 
 
@@ -101,6 +102,7 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
         grayscale=grayscale,
         vflip=False,
         train=True,
+        single_psf=single_psf,
     )
     ds_test = MNISTPropagated(
         psf_fp=psf,
@@ -115,6 +117,7 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
         grayscale=grayscale,
         vflip=False,
         train=False,
+        single_psf=single_psf,
     )
 
     ## loop over samples and save
@@ -124,49 +127,77 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
     # -- train set
     train_output = output_dir / "train"
     train_output.mkdir(exist_ok=True)
+    train_labels = []
     start_time = time.time()
     for i in range(len(ds_train)):
         if i == n_files:
             break
 
-        output_fp = train_output / f"img{i}"
+        output_fp = train_output / f"img{i}.png"
+        label_fp = train_output / f"label{i}"
         if os.path.isfile(output_fp):
-            continue
+            train_labels.append(torch.load(label_fp))
         else:
             data = ds_train[i]
 
-            # save transformed data
-            torch.save(data[0].cpu().clone(), output_fp)
-            torch.save(data[1], train_output / f"label{i}")
+            # save as viewable images
+            img_data = data[0].cpu().clone().numpy().squeeze()
+            if len(img_data) == 3:
+                # RGB
+                img_data = img_data.transpose(1, 2, 0)
+            im = Image.fromarray(img_data)
+            im.save(output_fp)
+            torch.save(data[1], label_fp)
+            train_labels.append(data[1])
 
         if i % BATCH == (BATCH - 1):
             proc_time = time.time() - start_time
             print(f"{i + 1} / {len(ds_train)} examples, {proc_time / 60} minutes")
 
-    print("Finished training set")
+    with open(train_output / "labels.txt", "w") as f:
+        for item in train_labels:
+            f.write("%s\n" % item)
+
+    proc_time = time.time() - start_time
+    print(f"Processing time [m] : {proc_time/ 60}")
+    print("Finished training set\n")
 
     # -- test set
     test_output = output_dir / "test"
     test_output.mkdir(exist_ok=True)
+    test_labels = []
     start_time = time.time()
     for i in range(len(ds_test)):
         if i == n_files:
             break
 
-        output_fp = test_output / f"img{i}"
+        output_fp = test_output / f"img{i}.png"
+        label_fp = test_output / f"label{i}"
         if os.path.isfile(output_fp):
-            continue
+            test_labels.append(torch.load(label_fp))
         else:
             data = ds_test[i]
 
-            # save transformed data
-            torch.save(data[0].cpu().clone(), output_fp)
-            torch.save(data[1], test_output / f"label{i}")
+            # save as viewable images
+            img_data = data[0].cpu().clone().numpy().squeeze()
+            if len(img_data) == 3:
+                # RGB
+                img_data = img_data.transpose(1, 2, 0)
+            im = Image.fromarray(img_data)
+            im.save(output_fp)
+            torch.save(data[1], label_fp)
+            test_labels.append(data[1])
 
         if i % BATCH == (BATCH - 1):
             proc_time = time.time() - start_time
             print(f"{i + 1} / {len(ds_test)} examples, {proc_time / 60} minutes")
 
+    with open(test_output / "labels.txt", "w") as f:
+        for item in test_labels:
+            f.write("%s\n" % item)
+
+    proc_time = time.time() - start_time
+    print(f"Processing time [m] : {proc_time / 60}")
     print("Finished test set")
 
 
