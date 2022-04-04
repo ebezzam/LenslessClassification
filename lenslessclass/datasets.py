@@ -34,7 +34,9 @@ class MNISTAugmented(Dataset):
         # get output shape
         img = Image.open(glob.glob(os.path.join(self._subdir, "img*"))[0])
         # horizontal and vertical size in pixels, whereas PyTorch expects (height, width)
-        self.output_dim = np.array(img.size).T
+
+        self.output_dim = np.array(img.size)[::-1]
+        # self.output_dim = np.array(img.size)
 
     def get_stats(self):
         """
@@ -116,9 +118,10 @@ class MNISTPropagated(datasets.MNIST):
                 psf = np.transpose(psf, (2, 0, 1))
             psf = torch.tensor(psf, device=device)
         else:
+            # output dimensions is same as dimension of convolution
             psf = None
             assert output_dim is not None
-            self.conv_dim = output_dim
+            self.conv_dim = np.array(output_dim)
 
         # -- convert to tensor and flip image if need be
         self.input_dim = np.array([28, 28])
@@ -129,10 +132,11 @@ class MNISTPropagated(datasets.MNIST):
         # -- resize to convolution dimension and scale to desired height at object plane
         magnification = mask2sensor / scene2mask
         self.scene_dim = sensor_size / magnification
-        if psf is not None:
-            object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
-        else:
-            object_height_pix = int(np.round(object_height / self.scene_dim[1] * output_dim[1]))
+        object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
+        # if psf is not None:
+        #     object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
+        # else:
+        #     object_height_pix = int(np.round(object_height / self.scene_dim[1] * output_dim[1]))
         scaling = object_height_pix / self.input_dim[1]
         object_dim = (np.round(self.input_dim * scaling)).astype(int).tolist()
         transform_list.append(
@@ -153,30 +157,32 @@ class MNISTPropagated(datasets.MNIST):
         transform = transforms.Compose(transform_list)
 
         # -- to do convolution on GPU (must faster)
-        self._transform_post = []
+        self._transform_post = None
         if psf is not None:
+            self._transform_post = []
+
             conv_op = RealFFTConvolve2D(psf)
             self._transform_post.append(conv_op)
 
-        if crop_output:
-            # remove previous padding
-            center = (psf == torch.max(psf)).nonzero().cpu().numpy()[0]
+            if crop_output:
+                # remove previous padding
+                center = (psf == torch.max(psf)).nonzero().cpu().numpy()[0]
 
-            def crop(img):
-                top = int(center[0] - object_dim[0] / 2)
-                left = int(center[1] - object_dim[1] / 2)
-                return transforms.functional.crop(
-                    img, top=top, left=left, height=object_dim[0], width=object_dim[1]
-                )
+                def crop(img):
+                    top = int(center[0] - object_dim[0] / 2)
+                    left = int(center[1] - object_dim[1] / 2)
+                    return transforms.functional.crop(
+                        img, top=top, left=left, height=object_dim[0], width=object_dim[1]
+                    )
 
-            self._transform_post.append(crop)
+                self._transform_post.append(crop)
 
-        # -- resize to output dimension
-        # more manageable to train on and perhaps don't need so many DOF
-        if output_dim:
-            self._transform_post.append(transforms.Resize(size=output_dim))
+            # -- resize to output dimension
+            # more manageable to train on and perhaps don't need so many DOF
+            if output_dim:
+                self._transform_post.append(transforms.Resize(size=output_dim))
 
-        self._transform_post = transforms.Compose(self._transform_post)
+            self._transform_post = transforms.Compose(self._transform_post)
 
         self.device = device
         super().__init__(root=root, train=train, download=download, transform=transform)
@@ -189,9 +195,10 @@ class MNISTPropagated(datasets.MNIST):
         else:
             img = res[0]
 
-        img = self._transform_post(img)
+        if self._transform_post:
+            img = self._transform_post(img)
 
-        # clip to 1
+        # cast to uint8 as on sensor
         if img.max() > 1:
             # todo: clip instead?
             img /= img.max()

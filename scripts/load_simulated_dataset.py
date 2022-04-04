@@ -13,7 +13,7 @@ python scripts/load_simulated_dataset.py --dataset data/MNIST_tape_down128
 
 SLM
 ```
-python scripts/load_simulated_dataset.py --dataset data/MNIST_fixedslm_down128
+python scripts/load_simulated_dataset.py --dataset data/MNIST_adafruit_down128
 ```
 """
 

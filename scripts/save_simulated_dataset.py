@@ -1,19 +1,26 @@
 """
 Save a dataset convolved with PSF and scaled accordingly.
 
+TODO : do in data loader so can be done faster in batches
+
 Convolve with lens PSF
 ```
 python scripts/save_simulated_dataset.py --psf psfs/lens.png --crop_output
 ```
 
-With lensless PSF (tape)
+Convolve with lensless PSF (tape)
 ```
 python scripts/save_simulated_dataset.py --psf psfs/tape.png
 ```
 
-With lensless PSF (SLM)
+Convolve with lensless PSF (SLM)
 ```
 python scripts/save_simulated_dataset.py --psf psfs/adafruit.png
+```
+
+Resized and scaled so that can be convolved with PSF during training
+```
+python scripts/save_simulated_dataset.py --down_psf 6
 ```
 
 """
@@ -52,9 +59,12 @@ BATCH = 1000  # how often to print progress
     is_flag=True,
     help="Same PSF for all channels (sum) or unique PSF for RGB.",
 )
+@click.option(
+    "--down_psf", type=float, help="Factor by which to downsample convolution.", default=2
+)
 @click.option("--down_out", type=float, help="Factor by which to downsample output.", default=128)
 @click.option("--n_files", type=int, default=None)
-def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf):
+def save_simulated_dataset(psf, down_psf, down_out, n_files, crop_output, rgb, single_psf):
     if torch.cuda.is_available():
         print("CUDA available, using GPU.")
         device = "cuda"
@@ -62,9 +72,15 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
         print("CUDA not available, using CPU.")
         device = "cpu"
 
-    ## -- create output directory
-    psf_bn = os.path.basename(psf).split(".")[0]
-    OUTPUT_DIR = os.path.join("data", f"MNIST_{psf_bn}_down{int(down_out)}")
+    ## -- create output director
+    if psf is not None:
+        psf_bn = os.path.basename(psf).split(".")[0]
+        OUTPUT_DIR = os.path.join("data", f"MNIST_{psf_bn}_down{int(down_out)}")
+    else:
+        # prior to convolution with PSF
+        down_out = None
+        OUTPUT_DIR = os.path.join("data", f"MNIST_no_psf_down{int(down_psf)}")
+
     if n_files:
         OUTPUT_DIR += f"_{n_files}files"
     if rgb:
@@ -76,7 +92,6 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
     scene2mask = 40e-2
     mask2sensor = 4e-3
     object_height = 5e-2
-    downsample_psf = 2
 
     # RPi sensor dimension, TODO pass as param for different sensors
     pixel_size = np.array([1.55e-6, 1.55e-6])
@@ -87,11 +102,11 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
     if down_out:
         output_dim = tuple((sensor_shape * 1 / down_out).astype(int))
     else:
-        output_dim = None
+        output_dim = tuple((sensor_shape * 1 / down_psf).astype(int))
     print("OUTPUT DIMENSION ", output_dim)
     ds_train = MNISTPropagated(
         psf_fp=psf,
-        downsample_psf=downsample_psf,
+        downsample_psf=down_psf,
         output_dim=output_dim,
         scene2mask=scene2mask,
         mask2sensor=mask2sensor,
@@ -106,7 +121,7 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
     )
     ds_test = MNISTPropagated(
         psf_fp=psf,
-        downsample_psf=downsample_psf,
+        downsample_psf=down_psf,
         output_dim=output_dim,
         scene2mask=scene2mask,
         mask2sensor=mask2sensor,
@@ -139,14 +154,20 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
             train_labels.append(torch.load(label_fp))
         else:
             data = ds_train[i]
-
-            # save as viewable images
             img_data = data[0].cpu().clone().numpy().squeeze()
-            if len(img_data) == 3:
-                # RGB
-                img_data = img_data.transpose(1, 2, 0)
-            im = Image.fromarray(img_data)
-            im.save(output_fp)
+
+            if img_data.dtype == np.uint8:
+                # save as viewable images
+                if len(img_data) == 3:
+                    # RGB
+                    img_data = img_data.transpose(1, 2, 0)
+                im = Image.fromarray(img_data)
+                im.save(output_fp)
+            else:
+                # save as flaot data
+                np.save(output_fp, img_data)
+
+            # save label
             torch.save(data[1], label_fp)
             train_labels.append(data[1])
 
@@ -177,14 +198,21 @@ def save_simulated_dataset(psf, down_out, n_files, crop_output, rgb, single_psf)
             test_labels.append(torch.load(label_fp))
         else:
             data = ds_test[i]
-
-            # save as viewable images
             img_data = data[0].cpu().clone().numpy().squeeze()
-            if len(img_data) == 3:
-                # RGB
-                img_data = img_data.transpose(1, 2, 0)
-            im = Image.fromarray(img_data)
-            im.save(output_fp)
+
+            if img_data.dtype == np.uint8:
+                # save as viewable images
+                if len(img_data) == 3:
+                    # RGB
+                    img_data = img_data.transpose(1, 2, 0)
+                im = Image.fromarray(img_data)
+                im.save(output_fp)
+
+            else:
+                # save as flaot data
+                np.save(output_fp, img_data)
+
+            # save label
             torch.save(data[1], label_fp)
             test_labels.append(data[1])
 
