@@ -84,8 +84,8 @@ def compare_simulated_measured(
 ):
 
     if save:
-        timestamp = datetime.now().strftime("_%d%m%d%Y_%Hh%M")
-        save = os.path.join("psfs", f"simulated_adafruit_{timestamp}.png")
+        timestamp = datetime.now().strftime("%d%m%Y_%Hh%M")
+        save = os.path.join("psfs", f"simulated_adafruit_down{int(down)}_{timestamp}.png")
     bit_depth = 12
     if noise_mean is None:
         noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
@@ -197,6 +197,7 @@ def compare_simulated_measured(
     psf_sim = psf_sim.astype(dtype=np.uint16)
     if save:
         cv2.imwrite(save, cv2.cvtColor(psf_sim, cv2.COLOR_RGB2BGR))
+        print("Saved simulated PSF to : ", save)
     print_image_info(psf_sim)
 
     print("\nNoise")
