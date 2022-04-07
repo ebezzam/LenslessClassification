@@ -9,6 +9,12 @@ Simulation parameters can be set via command line.
 
 Interesting enough, the speckle noise pattern looks similar to the measured PSF.
 
+To create and save simulated PSF of same size:
+```
+python scripts/compare_simulated_measured.py --save --save_noise --down 1 \
+    --no_plot --max_val 750 --device cuda
+```
+
 """
 
 
@@ -73,6 +79,7 @@ from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
 @click.option("--noise_mean", default=0, type=float, help="Noise standard deviation.")
 @click.option("--noise_std", default=0.01, type=float, help="Noise standard deviation.")
 @click.option("--max_val", default=500, type=float, help="Maximum value of simulated PSF.")
+@click.option("--device", default="cpu", type=str, help="Device to use for simulation.")
 def compare_simulated_measured(
     measured,
     down,
@@ -89,6 +96,7 @@ def compare_simulated_measured(
     noise_std,
     max_val,
     save_noise,
+    device,
 ):
 
     if save or save_noise:
@@ -129,7 +137,6 @@ def compare_simulated_measured(
     target_dim = psf_meas.shape[:2]
     deadspace = True
     dtype = torch.float32
-    device = "cpu"
 
     if dtype == torch.float32:
         ctype = torch.complex64
@@ -181,7 +188,10 @@ def compare_simulated_measured(
         psfs[i], _, _ = angular_spectrum(
             u_in=u_in[i], wv=color_system.wv[i], d1=d1, dz=mask2sensor, dtype=dtype, device=device
         )
-    psf_clean = torch.square(torch.abs(psfs)).numpy().transpose(1, 2, 0)
+    if device == "cuda":
+        psf_clean = torch.square(torch.abs(psfs)).cpu().numpy().transpose(1, 2, 0)
+    else:
+        psf_clean = torch.square(torch.abs(psfs)).cpu().numpy().transpose(1, 2, 0)
     psf_clean /= np.linalg.norm(psf_clean.ravel())
 
     # add noise
@@ -212,7 +222,7 @@ def compare_simulated_measured(
         noise *= 2**bit_depth - 1
     noise = noise.astype(dtype=np.uint16)
     if save_noise:
-        cv2.imwrite(save, cv2.cvtColor(noise, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(save_noise, cv2.cvtColor(noise, cv2.COLOR_RGB2BGR))
         print("Saved simulated noise to : ", save_noise)
     print_image_info(noise)
 
