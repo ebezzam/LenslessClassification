@@ -1,5 +1,8 @@
+from os import device_encoding
+from turtle import pu
 from torch import nn
 import torch
+from torchvision import transforms
 from torchvision.transforms.functional import rgb_to_grayscale
 import numpy as np
 from waveprop.slm import get_active_pixel_dim, get_slm_mask
@@ -47,6 +50,8 @@ class SLMMultiClassLogistic(nn.Module):
         deadspace=True,
         first_color=0,
         grayscale=True,
+        device_mask_creation=None,
+        output_dim=None,
     ):
         super(SLMMultiClassLogistic, self).__init__()
 
@@ -68,13 +73,21 @@ class SLMMultiClassLogistic(nn.Module):
         self.first_color = first_color
         self.grayscale = grayscale
         self.device = device
+        if device_mask_creation is None:
+            device_mask_creation = device
+        else:
+            self.device_mask_creation = device_mask_creation
         self.dtype = dtype
+        self.output_dim = output_dim
         self._numel = int(np.prod(np.array(self.input_shape)))
 
         # -- decision network after sensor
+        if self.output_dim is not None:
+            self.downsample = transforms.Resize(size=list(output_dim))
+
         self.flatten = nn.Flatten()
         self.multiclass_logistic_reg = nn.Sequential(
-            nn.Linear(int(np.prod(input_shape)), 10),
+            nn.Linear(int(np.prod(output_dim)), 10),
             nn.Softmax(dim=1),
         )
 
@@ -92,11 +105,15 @@ class SLMMultiClassLogistic(nn.Module):
         # TODO : need to make internal changes to get_slm_mask for no deadspace
         if deadspace:
             self.slm_vals = nn.Parameter(
-                torch.rand(*n_active_slm_pixels, dtype=dtype, device=device, requires_grad=True)
+                torch.rand(
+                    *n_active_slm_pixels, dtype=dtype, device=self.device, requires_grad=True
+                )
             )
         else:
             self.slm_vals = nn.Parameter(
-                torch.rand(*overlapping_mask_dim, dtype=dtype, device=device, requires_grad=True)
+                torch.rand(
+                    *overlapping_mask_dim, dtype=dtype, device=self.device, requires_grad=True
+                )
             )
 
         # -- initialize PSF from SLM values and pre-compute constants
@@ -123,10 +140,14 @@ class SLMMultiClassLogistic(nn.Module):
 
         # TODO : compute PSF here?? on in training loop to give user
         #  flexibility of how often to update SLM mask
-
         # - convolve with intensity PSF
         x = fftconvolve(x, self._psf, axes=(-2, -1))
         # x = fftconvolve(x, self._psf, axes=(-2, -1)) / self._numel
+
+        # TODO non-linearity??
+        if self.output_dim is not None:
+            x = self.downsample(x)
+
         x = self.conv_bn(torch.clip(x, min=0))
 
         # -- digital decision network after sensor
@@ -146,12 +167,15 @@ class SLMMultiClassLogistic(nn.Module):
             sensor_config=self.sensor_config,
             crop_fact=self.crop_fact,
             target_dim=self.input_shape,
-            slm_vals=self.slm_vals,
+            slm_vals=self.slm_vals.to(self.device_mask_creation),
             deadspace=self.deadspace,
-            device=self.device,
+            device=self.device_mask_creation,
             dtype=self.dtype,
             first_color=self.first_color,
         )
+
+        # TODO can variable be on different device
+        mask = mask.to(self.device)
 
         # apply mask
         u_in = mask * self.spherical_wavefront
@@ -208,8 +232,6 @@ class SLMMultiClassLogistic(nn.Module):
             self._psf = rgb_to_grayscale(torch.square(torch.abs(psfs)))
         else:
             self._psf = torch.square(torch.abs(psfs))
-
-        print(self._psf.max())
 
     def name(self):
         return "SLMMultiClassLogistic"

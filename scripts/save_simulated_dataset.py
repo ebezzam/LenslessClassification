@@ -20,7 +20,8 @@ python scripts/save_simulated_dataset.py --psf psfs/adafruit.png
 
 Resized and scaled so that can be convolved with PSF during training
 ```
-python scripts/save_simulated_dataset.py --down_psf 6
+python scripts/save_simulated_dataset.py --down_psf 2 --output_dir /scratch \
+    --n_files 100
 ```
 
 """
@@ -62,24 +63,33 @@ BATCH = 1000  # how often to print progress
 @click.option(
     "--down_psf", type=float, help="Factor by which to downsample convolution.", default=2
 )
+@click.option("--cpu", is_flag=True, help="Use CPU even if GPU if available.")
 @click.option("--down_out", type=float, help="Factor by which to downsample output.", default=128)
 @click.option("--n_files", type=int, default=None)
-def save_simulated_dataset(psf, down_psf, down_out, n_files, crop_output, rgb, single_psf):
-    if torch.cuda.is_available():
-        print("CUDA available, using GPU.")
-        device = "cuda"
-    else:
-        print("CUDA not available, using CPU.")
+@click.option("--output_dir", type=str, default="data", help="Path to save augmented dataset.")
+def save_simulated_dataset(
+    psf, down_psf, down_out, n_files, crop_output, rgb, single_psf, cpu, output_dir
+):
+    use_cuda = torch.cuda.is_available()
+    if cpu:
         device = "cpu"
+        use_cuda = False
+    else:
+        if use_cuda:
+            device = "cuda"
+            print("CUDA available, using GPU.")
+        else:
+            device = "cpu"
+            print("CUDA not available, using CPU.")
 
     ## -- create output director
     if psf is not None:
         psf_bn = os.path.basename(psf).split(".")[0]
-        OUTPUT_DIR = os.path.join("data", f"MNIST_{psf_bn}_down{int(down_out)}")
+        OUTPUT_DIR = os.path.join(output_dir, f"MNIST_{psf_bn}_down{int(down_out)}")
     else:
         # prior to convolution with PSF
         down_out = None
-        OUTPUT_DIR = os.path.join("data", f"MNIST_no_psf_down{int(down_psf)}")
+        OUTPUT_DIR = os.path.join(output_dir, f"MNIST_no_psf_down{int(down_psf)}")
 
     if n_files:
         OUTPUT_DIR += f"_{n_files}files"
@@ -150,7 +160,7 @@ def save_simulated_dataset(psf, down_psf, down_out, n_files, crop_output, rgb, s
 
         output_fp = train_output / f"img{i}.png"
         label_fp = train_output / f"label{i}"
-        if os.path.isfile(output_fp):
+        if os.path.isfile(output_fp) and os.path.isfile(label_fp):
             train_labels.append(torch.load(label_fp))
         else:
             data = ds_train[i]
@@ -164,7 +174,7 @@ def save_simulated_dataset(psf, down_psf, down_out, n_files, crop_output, rgb, s
                 im = Image.fromarray(img_data)
                 im.save(output_fp)
             else:
-                # save as flaot data
+                # save as float data
                 np.save(output_fp, img_data)
 
             # save label

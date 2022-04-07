@@ -7,6 +7,8 @@ python scripts/compare_simulated_measured.py
 
 Simulation parameters can be set via command line.
 
+Interesting enough, the speckle noise pattern looks similar to the measured PSF.
+
 """
 
 
@@ -38,7 +40,12 @@ from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
 @click.option(
     "--save",
     is_flag=True,
-    help="Whether to save measured PSF.",
+    help="Whether to save simulated PSF.",
+)
+@click.option(
+    "--save_noise",
+    is_flag=True,
+    help="Whether to save simulated noise PSF.",
 )
 @click.option("--slm", type=str, help="Which SLM to use.", default=SLMOptions.ADAFRUIT.value)
 @click.option("--sensor", type=str, help="Which sensor to use.", default=SensorOptions.RPI_HQ.value)
@@ -81,11 +88,17 @@ def compare_simulated_measured(
     noise_mean,
     noise_std,
     max_val,
+    save_noise,
 ):
 
-    if save:
+    if save or save_noise:
         timestamp = datetime.now().strftime("%d%m%Y_%Hh%M")
-        save = os.path.join("psfs", f"simulated_adafruit_down{int(down)}_{timestamp}.png")
+        if save:
+            save = os.path.join("psfs", f"simulated_adafruit_down{int(down)}_{timestamp}.png")
+        if save_noise:
+            save_noise = os.path.join(
+                "psfs", f"simulated_adafruit_noise_down{int(down)}_{timestamp}.png"
+            )
     bit_depth = 12
     if noise_mean is None:
         noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
@@ -105,9 +118,6 @@ def compare_simulated_measured(
     n_large_pixels = len(large_pixels)
     n_total_pixels = np.prod(psf_meas.shape)
     print(f"percentage of large pixels : {n_large_pixels / n_total_pixels * 100}")
-
-    mean_large = np.mean(large_pixels)
-    std_large = np.std(large_pixels)
 
     if not no_plot:
         plot_image(psf_meas, gamma=gamma, normalize=normalize, ax=ax[0][0])
@@ -181,12 +191,6 @@ def compare_simulated_measured(
     noise = psf_sim - psf_clean
     noise = np.clip(noise, a_min=0, a_max=1)
 
-    # print("\nSimulated (float)")
-    # print_image_info(psf_sim)
-    #
-    # print("\nNoise (float)")
-    # print_image_info(noise)
-
     # cast to uint as on sensor
     print("\nSimulated")
     psf_sim /= psf_sim.max()
@@ -207,6 +211,9 @@ def compare_simulated_measured(
     else:
         noise *= 2**bit_depth - 1
     noise = noise.astype(dtype=np.uint16)
+    if save_noise:
+        cv2.imwrite(save, cv2.cvtColor(noise, cv2.COLOR_RGB2BGR))
+        print("Saved simulated noise to : ", save_noise)
     print_image_info(noise)
 
     if not no_plot:

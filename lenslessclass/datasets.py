@@ -4,11 +4,12 @@ import cv2
 import torch
 from PIL import Image
 from torchvision import transforms, datasets
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import os
 import glob
 from lenslessclass.util import RealFFTConvolve2D
+from tqdm import tqdm
 
 
 # TODO : abstract parent class for DatasetPropagated
@@ -38,25 +39,34 @@ class MNISTAugmented(Dataset):
         self.output_dim = np.array(img.size)[::-1]
         # self.output_dim = np.array(img.size)
 
-    def get_stats(self):
+    def get_stats(self, batch_size=100, num_workers=4):
         """
         Get mean and standard deviation.
 
         Example: https://kozodoi.me/python/deep%20learning/pytorch/tutorial/2021/03/08/image-mean-std.html
 
-        TODO : in batches for faster implementation?
         """
-        psum = 0
-        psum_sq = 0
-        for i in range(self._n_files):
-            img = self[i][0]
-            psum += img.sum()
-            psum_sq += (img**2).sum()
 
+        image_loader = DataLoader(
+            self, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True
+        )
+
+        # placeholders
+        psum = torch.tensor([0.0])
+        psum_sq = torch.tensor([0.0])
+
+        # loop through images
+        for inputs in tqdm(image_loader):
+            psum += inputs[0].sum(axis=[0, 2, 3])
+            psum_sq += (inputs[0] ** 2).sum(axis=[0, 2, 3])
+
+        # pixel count
         count = self._n_files * np.prod(self.output_dim)
+
+        # mean and std
         total_mean = psum / count
         total_var = (psum_sq / count) - (total_mean**2)
-        total_std = np.sqrt(total_var)
+        total_std = torch.sqrt(total_var)
 
         return total_mean.item(), total_std.item()
 
