@@ -161,6 +161,10 @@ def train_logistic_reg(dataset, lr, momentum, n_epoch, batch_size):
     print(f"Processing time [m] : {proc_time / 60}")
     print("Finished Training")
 
+    # save model
+    PATH = f"./{os.path.basename(dataset)}_logistic_reg.pth"
+    torch.save(model.state_dict(), PATH)
+
 
 if __name__ == "__main__":
     train_logistic_reg()

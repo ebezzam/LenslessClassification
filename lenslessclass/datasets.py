@@ -98,8 +98,6 @@ class MNISTPropagated(datasets.MNIST):
         crop_output=False,  # otherwise downsample output
         vflip=True,
         grayscale=True,
-        fov=None,
-        offset=None,
         device=None,
         root="./data",
         train=True,
@@ -107,6 +105,8 @@ class MNISTPropagated(datasets.MNIST):
         scale=(1, 1),
         dtype=np.float32,
         dtype_out=torch.uint8,  # simulate quantization of sensor
+        fov=None,
+        offset=None,
         **kwargs,
     ):
 
