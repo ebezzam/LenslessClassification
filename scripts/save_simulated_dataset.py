@@ -114,6 +114,8 @@ def save_simulated_dataset(
     else:
         output_dim = tuple((sensor_shape * 1 / down_psf).astype(int))
     print("OUTPUT DIMENSION ", output_dim)
+    print("Number of hidden units :", np.prod(output_dim))
+
     ds_train = MNISTPropagated(
         psf_fp=psf,
         downsample_psf=down_psf,

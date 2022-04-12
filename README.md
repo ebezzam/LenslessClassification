@@ -12,4 +12,4 @@ Have to install `waveprop` as well! Atm a private repo...
 
 Procedure (for fixed PSF):
 1. Prepare dataset: `scripts/save_simulated_dataset.py`
-2. Run training.
+2. Run training: `scripts/train_logistic_reg.py`

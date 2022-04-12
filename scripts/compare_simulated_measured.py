@@ -102,10 +102,12 @@ def compare_simulated_measured(
     if save or save_noise:
         timestamp = datetime.now().strftime("%d%m%Y_%Hh%M")
         if save:
-            save = os.path.join("psfs", f"simulated_adafruit_down{int(down)}_{timestamp}.png")
+            save = os.path.join(
+                "psfs", f"simulated_adafruit_crop{crop_fact}_down{int(down)}_{timestamp}.png"
+            )
         if save_noise:
             save_noise = os.path.join(
-                "psfs", f"simulated_adafruit_noise_down{int(down)}_{timestamp}.png"
+                "psfs", f"simulated_adafruit_noise_crop{crop_fact}_down{int(down)}_{timestamp}.png"
             )
     bit_depth = 12
     if noise_mean is None:
@@ -153,6 +155,7 @@ def compare_simulated_measured(
         slm_vals = torch.rand(*n_active_slm_pixels, dtype=dtype, device=device)
     else:
         slm_vals = torch.rand(*overlapping_mask_dim, dtype=dtype, device=device)
+    print("Number of active pixels: ", n_active_slm_pixels)
 
     color_system = ColorSystem.rgb()
     d1 = np.array(overlapping_mask_size) / target_dim

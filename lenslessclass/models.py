@@ -52,6 +52,8 @@ class SLMMultiClassLogistic(nn.Module):
         grayscale=True,
         device_mask_creation=None,
         output_dim=None,
+        multi_gpu=False,
+        sensor_activation=None,
     ):
         super(SLMMultiClassLogistic, self).__init__()
 
@@ -81,18 +83,27 @@ class SLMMultiClassLogistic(nn.Module):
         self.output_dim = output_dim
         self._numel = int(np.prod(np.array(self.input_shape)))
 
+        # -- normalize after PSF
+        self.conv_bn = nn.BatchNorm2d(1)
+
         # -- decision network after sensor
         if self.output_dim is not None:
             self.downsample = transforms.Resize(size=list(output_dim))
 
+        self.sensor_activation = sensor_activation
         self.flatten = nn.Flatten()
-        self.multiclass_logistic_reg = nn.Sequential(
-            nn.Linear(int(np.prod(output_dim)), 10),
-            nn.Softmax(dim=1),
-        )
+        self.linear1 = nn.Linear(int(np.prod(output_dim)), 10)
+        self.decision = nn.Softmax(dim=1)
 
-        # normalize after PSF
-        self.conv_bn = nn.BatchNorm2d(1)
+        # self.multiclass_logistic_reg = nn.Sequential(
+        #     nn.Linear(int(np.prod(output_dim)), 10),
+        #     nn.Softmax(dim=1),
+        # )
+
+        if multi_gpu:
+            self.downsample = nn.DataParallel(self.downsample)
+            self.conv_bn = nn.DataParallel(self.conv_bn)
+            self.linear1 = nn.DataParallel(self.linear1)
 
         # -- determine number of active SLM pixels
         overlapping_mask_size, overlapping_mask_dim, n_active_slm_pixels = get_active_pixel_dim(
@@ -142,17 +153,20 @@ class SLMMultiClassLogistic(nn.Module):
         #  flexibility of how often to update SLM mask
         # - convolve with intensity PSF
         x = fftconvolve(x, self._psf, axes=(-2, -1))
-        # x = fftconvolve(x, self._psf, axes=(-2, -1)) / self._numel
 
-        # TODO non-linearity??
         if self.output_dim is not None:
             x = self.downsample(x)
 
         x = self.conv_bn(torch.clip(x, min=0))
 
+        if self.sensor_activation is not None:
+            x = self.sensor_activation(x)
+
         # -- digital decision network after sensor
         x = self.flatten(x)
-        logits = self.multiclass_logistic_reg(x)
+        x = self.linear1(x)
+        logits = self.decision(x)
+        # logits = self.multiclass_logistic_reg(x)
         return logits
 
     def compute_intensity_psf(self):
