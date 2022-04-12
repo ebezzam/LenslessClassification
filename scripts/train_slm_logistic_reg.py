@@ -72,6 +72,12 @@ from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, S
     default=None,
 )
 @click.option(
+    "--opti",
+    type=click.Choice(["sgd", "adam"], case_sensitive=False),
+    help="Optimizer.",
+    default="sgd",
+)
+@click.option(
     "--std",
     type=float,
     help="Standard deviation of original dataset to normalize, if not provided it will be computed.",
@@ -95,6 +101,7 @@ def train_slm_logistic_reg(
     down_out,
     print_epoch,
     sensor_act,
+    opti,
 ):
 
     if print_epoch is None:
@@ -102,12 +109,11 @@ def train_slm_logistic_reg(
 
     if sensor_act is not None:
         # https://pytorch.org/docs/stable/nn.functional.html#non-linear-activation-functions
-        # ReLU doesn't make sense as activation as image intensity is always positive!
-        # if sensor_act == "relu":
-        #     sensor_act = nn.ReLU()
-        # elif sensor_act == "leaky":
-        #     sensor_act = nn.LeakyReLU(float=0.1)
-        if sensor_act == "tanh":
+        if sensor_act == "relu":
+            sensor_act = nn.ReLU()
+        elif sensor_act == "leaky":
+            sensor_act = nn.LeakyReLU(float=0.1)
+        elif sensor_act == "tanh":
             sensor_act = nn.Tanh()
         else:
             raise ValueError("Not supported activation.")
@@ -192,7 +198,20 @@ def train_slm_logistic_reg(
 
     # TODO : try ADAM
     # set different learning rates: https://pytorch.org/docs/stable/optim.html
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
+    if opti == "sgd":
+        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
+    elif opti == "adam":
+        # same default params
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=0.001,
+            betas=(0.9, 0.999),
+            eps=1e-08,
+            weight_decay=0,
+            amsgrad=False,
+        )
+    else:
+        raise ValueError("Invalid optimization approach.")
 
     criterion = nn.CrossEntropyLoss()
 
@@ -228,6 +247,10 @@ def train_slm_logistic_reg(
             loss = criterion(out, target)
             loss.backward()
             optimizer.step()
+
+            # ensure model weights are between [0, 1]
+            with torch.no_grad():
+                model.slm_vals.clamp_(min=0, max=1)
 
             # SLM values have updated after backward
             # TODO : move into forward?
