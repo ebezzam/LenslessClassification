@@ -157,10 +157,10 @@ class SLMMultiClassLogistic(nn.Module):
         if self.output_dim is not None:
             x = self.downsample(x)
 
+        x = self.conv_bn(torch.clip(x, min=0))
+
         if self.sensor_activation is not None:
             x = self.sensor_activation(x)
-
-        x = self.conv_bn(torch.clip(x, min=0))
 
         # -- digital decision network after sensor
         x = self.flatten(x)
