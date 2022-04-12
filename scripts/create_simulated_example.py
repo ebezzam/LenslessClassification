@@ -19,9 +19,11 @@ python scripts/create_simulated_example.py --psf psfs/adafruit.png
 TODO : plot with dimensions
 
 """
-
+import os.path
 import time
+from PIL import Image
 import click
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from lenslessclass.datasets import MNISTPropagated
@@ -69,8 +71,13 @@ from lensless.io import load_psf
     is_flag=True,
     help="Whether to normalize simulation plot.",
 )
+@click.option(
+    "--save",
+    is_flag=True,
+    help="Save original image and simulated example.",
+)
 def create_simulated_example(
-    psf, idx, down_psf, down_out, gamma, single_psf, rgb, crop_output, normalize_plot
+    psf, idx, down_psf, down_out, gamma, single_psf, rgb, crop_output, normalize_plot, save
 ):
     assert psf is not None
 
@@ -118,6 +125,9 @@ def create_simulated_example(
     print("minimum : ", original_image.min().item())
     print("maximum : ", original_image.max().item())
     plot_image(original_image, gamma=gamma, normalize=False, ax=ax[0])
+    if save:
+        im = Image.fromarray(original_image.cpu().numpy())
+        im.save(f"original_{idx}.png")
     ax[0].set_title("Original")
 
     # plot PSF
@@ -147,6 +157,10 @@ def create_simulated_example(
     # plot augmented example
     input_image_cpu = np.transpose(input_image.cpu(), (1, 2, 0))
     plot_image(input_image_cpu, gamma=gamma, normalize=normalize_plot, ax=ax[2])
+    if save:
+        im = Image.fromarray(input_image_cpu.numpy().squeeze())
+        bn = os.path.basename(psf).split(".")[0]
+        im.save(f"simulated_{idx}_{bn}.png")
     ax[2].set_title("Simulated")
 
     plt.show()
