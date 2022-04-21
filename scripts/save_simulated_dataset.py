@@ -82,7 +82,7 @@ def save_simulated_dataset(
             device = "cpu"
             print("CUDA not available, using CPU.")
 
-    ## -- create output director
+    ## -- create output directory
     if psf is not None:
         psf_bn = os.path.basename(psf).split(".")[0]
         OUTPUT_DIR = os.path.join(output_dir, f"MNIST_{psf_bn}_down{int(down_out)}")

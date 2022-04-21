@@ -17,17 +17,19 @@ class MultiClassLogistic(nn.Module):
     Example: https://gist.github.com/xmfbit/b27cdbff68870418bdb8cefa86a2d558
     """
 
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, multi_gpu=False):
         super(MultiClassLogistic, self).__init__()
         self.flatten = nn.Flatten()
-        self.multiclass_logistic_reg = nn.Sequential(
-            nn.Linear(int(np.prod(input_shape)), 10),
-            nn.Softmax(dim=1),
-        )
+        self.linear1 = nn.Linear(int(np.prod(input_shape)), 10)
+        self.decision = nn.Softmax(dim=1)
+
+        if multi_gpu:
+            self.linear1 = nn.DataParallel(self.linear1)
 
     def forward(self, x):
         x = self.flatten(x)
-        logits = self.multiclass_logistic_reg(x)
+        x = self.linear1(x)
+        logits = self.decision(x)
         return logits
 
     def name(self):
@@ -54,6 +56,7 @@ class SLMMultiClassLogistic(nn.Module):
         output_dim=None,
         multi_gpu=False,
         sensor_activation=None,
+        dropout=None,
     ):
         super(SLMMultiClassLogistic, self).__init__()
 
@@ -92,13 +95,12 @@ class SLMMultiClassLogistic(nn.Module):
 
         self.sensor_activation = sensor_activation
         self.flatten = nn.Flatten()
+        if dropout is not None:
+            self.dropout = nn.Dropout(dropout)
+        else:
+            self.dropout = None
         self.linear1 = nn.Linear(int(np.prod(output_dim)), 10)
         self.decision = nn.Softmax(dim=1)
-
-        # self.multiclass_logistic_reg = nn.Sequential(
-        #     nn.Linear(int(np.prod(output_dim)), 10),
-        #     nn.Softmax(dim=1),
-        # )
 
         if multi_gpu:
             self.downsample = nn.DataParallel(self.downsample)
@@ -147,6 +149,13 @@ class SLMMultiClassLogistic(nn.Module):
         self._H_exp = None
         self.compute_intensity_psf()
 
+    @property
+    def psf(self, numpy=False):
+        if numpy:
+            self._psf.cpu().detach().numpy().squeeze()
+        else:
+            return self._psf
+
     def forward(self, x):
 
         # TODO : compute PSF here?? on in training loop to give user
@@ -162,11 +171,13 @@ class SLMMultiClassLogistic(nn.Module):
         if self.sensor_activation is not None:
             x = self.sensor_activation(x)
 
+        if self.dropout is not None:
+            x = self.dropout(x)
+
         # -- digital decision network after sensor
         x = self.flatten(x)
         x = self.linear1(x)
         logits = self.decision(x)
-        # logits = self.multiclass_logistic_reg(x)
         return logits
 
     def compute_intensity_psf(self):

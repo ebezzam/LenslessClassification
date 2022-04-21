@@ -50,8 +50,8 @@ from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, S
     "--mask2sensor", type=float, default=0.004, help="SLM/mask to sensor distance in meters."
 )
 @click.option("--cpu", is_flag=True, help="Use CPU even if GPU if available.")
-@click.option("--lr", type=float, help="Learning rate.", default=0.01)
-@click.option("--momentum", type=float, help="Momentum (for learning).", default=0.01)
+@click.option("--lr", type=float, help="Learning rate for SGD.", default=0.01)
+@click.option("--momentum", type=float, help="Momentum for SGD.", default=0.01)
 @click.option("--n_epoch", type=int, help="Number of epochs to train.", default=10)
 @click.option("--batch_size", type=int, help="Batch size.", default=30)
 @click.option(
@@ -70,6 +70,12 @@ from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, S
     type=str,
     help="Activation at sensor. If not provided, none will applied.",
     default=None,
+)
+@click.option(
+    "--dropout",
+    default=None,
+    type=float,
+    help="Percentage of dropout after diffractive optical layer.",
 )
 @click.option(
     "--opti",
@@ -102,6 +108,7 @@ def train_slm_logistic_reg(
     print_epoch,
     sensor_act,
     opti,
+    dropout,
 ):
 
     if print_epoch is None:
@@ -137,10 +144,6 @@ def train_slm_logistic_reg(
                 print(f"-- using {n_gpus} GPUs")
             else:
                 multi_gpu = False
-            # if n_gpus > 1:
-            #     device_model = "cuda:1"
-            # else:
-            #     device_model = device
 
         else:
             device = "cpu"
@@ -187,6 +190,7 @@ def train_slm_logistic_reg(
         output_dim=output_dim,
         sensor_activation=sensor_act,
         multi_gpu=multi_gpu,
+        dropout=dropout,
     )
 
     # # TODO : doesn't work since PSF generation happens on CPU?
@@ -196,8 +200,8 @@ def train_slm_logistic_reg(
     if use_cuda:
         model = model.to(device)
 
-    # TODO : try ADAM
-    # set different learning rates: https://pytorch.org/docs/stable/optim.html
+    # set optimizer
+    # TODO : set different learning rates: https://pytorch.org/docs/stable/optim.html
     if opti == "sgd":
         optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
     elif opti == "adam":
