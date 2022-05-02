@@ -4,7 +4,6 @@ Setup
 ```
 conda create --name lensless_class python=3.9
 pip install -e .
-pip install git+https://github.com/LCAV/LenslessPiCam.git
 conda install -c pytorch torchvision==0.10.1 cudatoolkit=11.1 pytorch
 ```
 

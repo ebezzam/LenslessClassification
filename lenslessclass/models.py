@@ -1,5 +1,5 @@
 from os import device_encoding
-from turtle import pu
+from turtle import hideturtle, pu
 from torch import nn
 import torch
 from torchvision import transforms
@@ -10,6 +10,8 @@ from waveprop.pytorch_util import fftconvolve
 from waveprop.spherical import spherical_prop
 from waveprop.color import ColorSystem
 from waveprop.rs import angular_spectrum
+from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
+from skimage.util.noise import random_noise
 
 
 class MultiClassLogistic(nn.Module):
@@ -36,6 +38,35 @@ class MultiClassLogistic(nn.Module):
         return "MultiClassLogistic"
 
 
+class SingleHidden(nn.Module):
+    """
+    Example: https://gist.github.com/xmfbit/b27cdbff68870418bdb8cefa86a2d558
+    """
+
+    def __init__(self, input_shape, hidden_dim, multi_gpu=False):
+        assert isinstance(hidden_dim, int)
+        self.hidden_dim = hidden_dim
+        super(MultiClassLogistic, self).__init__()
+        self.flatten = nn.Flatten()
+        self.linear1 = nn.Linear(int(np.prod(input_shape)), hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, 10)
+        self.decision = nn.Softmax(dim=1)
+
+        if multi_gpu:
+            self.linear1 = nn.DataParallel(self.linear1)
+            self.linear2 = nn.DataParallel(self.linear2)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.linear1(x)
+        x = self.linear2(x)
+        logits = self.decision(x)
+        return logits
+
+    def name(self):
+        return f"SingleHidden{self.hidden_dim}"
+
+
 class SLMMultiClassLogistic(nn.Module):
     """ """
 
@@ -57,6 +88,8 @@ class SLMMultiClassLogistic(nn.Module):
         multi_gpu=False,
         sensor_activation=None,
         dropout=None,
+        noise_type=None,
+        snr=40,
     ):
         super(SLMMultiClassLogistic, self).__init__()
 
@@ -68,7 +101,7 @@ class SLMMultiClassLogistic(nn.Module):
             raise ValueError(f"Unsupported data type : {dtype}")
 
         # store configuration
-        self.input_shape = input_shape
+        self.input_shape = np.array(input_shape)
         self.slm_config = slm_config
         self.sensor_config = sensor_config
         self.crop_fact = crop_fact
@@ -83,8 +116,63 @@ class SLMMultiClassLogistic(nn.Module):
         else:
             self.device_mask_creation = device_mask_creation
         self.dtype = dtype
-        self.output_dim = output_dim
+        self.output_dim = np.array(output_dim)
         self._numel = int(np.prod(np.array(self.input_shape)))
+
+        # adding noise
+        if noise_type is not None:
+            # TODO : hardcoded for Raspberry Pi HQ sensor
+            bit_depth = 12
+            noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
+
+            def add_noise(measurement):
+
+                measurement_copy = measurement.clone().cpu().detach().numpy()
+                sig_var = np.linalg.norm(measurement_copy, axis=(-2, -1))
+                noise = []
+                for i, _val in enumerate(sig_var):
+
+                    noise_var = _val / (10 ** (snr / 10))
+                    noise.append(
+                        random_noise(
+                            measurement_copy[i],
+                            mode=noise_type,
+                            clip=False,
+                            mean=noise_mean,
+                            var=noise_var**2,
+                        )
+                        - measurement_copy[i]
+                        # random_noise(
+                        #     measurement_copy[i],
+                        #     mode=noise_type,
+                        #     clip=False,
+                        #     mean=noise_mean,
+                        #     var=noise_var**2,
+                        # )
+                    )
+
+                noise = torch.tensor(np.array(noise).astype(np.float32)).to(device)
+
+                # import pudb; pudb.set_trace()
+
+                # # measurement is intensity
+                # sig_var = np.linalg.norm(measurement)
+                # noise_var = sig_var / (10 ** (snr / 10))
+                # noise = torch.tensor(
+                #     random_noise(
+                #         measurement,
+                #         mode=noise_type,
+                #         clip=False,
+                #         mean=noise_mean,
+                #         var=noise_var**2,
+                #     ).astype(np.float32)
+                # ).to(device)
+
+                return measurement + noise
+
+            self.add_noise = add_noise
+        else:
+            self.add_noise = None
 
         # -- normalize after PSF
         self.conv_bn = nn.BatchNorm2d(1)
@@ -163,6 +251,10 @@ class SLMMultiClassLogistic(nn.Module):
         # - convolve with intensity PSF
         x = fftconvolve(x, self._psf, axes=(-2, -1))
 
+        if self.add_noise is not None:
+            x = self.add_noise(x)
+
+        # TODO : try other downsampling / pooling schemes
         if self.output_dim is not None:
             x = self.downsample(x)
 

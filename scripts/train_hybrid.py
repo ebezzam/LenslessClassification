@@ -17,9 +17,10 @@ python scripts/train_slm_logistic_reg.py  \
 
 """
 
-from turtle import pu
 from lenslessclass.models import SLMMultiClassLogistic
 import torch
+import random
+import pathlib as plib
 import os
 import torch.nn as nn
 from lenslessclass.datasets import MNISTAugmented
@@ -28,6 +29,10 @@ import torchvision.transforms as transforms
 import time
 import click
 from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, SensorParam
+import numpy as np
+import json
+from os.path import dirname, abspath, join
+from datetime import datetime
 
 
 @click.command()
@@ -36,6 +41,7 @@ from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, S
     type=str,
     help="Path to dataset.",
 )
+@click.option("--seed", type=int, help="Random seed.", default=0)
 @click.option("--slm", type=str, help="Which SLM to use.", default=SLMOptions.ADAFRUIT.value)
 @click.option("--sensor", type=str, help="Which sensor to use.", default=SensorOptions.RPI_HQ.value)
 @click.option(
@@ -88,7 +94,21 @@ from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, S
     type=float,
     help="Standard deviation of original dataset to normalize, if not provided it will be computed.",
 )
+@click.option(
+    "--noise_type",
+    default=None,
+    type=click.Choice(["speckle", "gaussian", "s&p", "poisson"]),
+    help="Noise type to add.",
+)
+@click.option("--snr", default=40, type=float, help="SNR to determine noise to add.")
 @click.option("--down_out", type=float, help="Factor by which to downsample output.", default=128)
+@click.option(
+    "--output_dim",
+    default=None,
+    nargs=2,
+    type=int,
+    help="Output dimension (height, width). Use this instead of `down_out` if provided",
+)
 def train_slm_logistic_reg(
     dataset,
     slm,
@@ -109,25 +129,39 @@ def train_slm_logistic_reg(
     sensor_act,
     opti,
     dropout,
+    seed,
+    noise_type,
+    snr,
+    output_dim,
 ):
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+    device_mask_creation = "cpu"  # TODO: bc doesn't fit on GPU
 
     if print_epoch is None:
         print_epoch = batch_size
 
+    sensor_act_fn = None
     if sensor_act is not None:
         # https://pytorch.org/docs/stable/nn.functional.html#non-linear-activation-functions
         if sensor_act == "relu":
-            sensor_act = nn.ReLU()
+            sensor_act_fn = nn.ReLU()
         elif sensor_act == "leaky":
-            sensor_act = nn.LeakyReLU(float=0.1)
+            sensor_act_fn = nn.LeakyReLU(float=0.1)
         elif sensor_act == "tanh":
-            sensor_act = nn.Tanh()
+            sensor_act_fn = nn.Tanh()
         else:
             raise ValueError("Not supported activation.")
 
     sensor_param = sensor_dict[sensor]
-    if down_out:
-        output_dim = tuple((sensor_param[SensorParam.SHAPE] * 1 / down_out).astype(int))
+
+    if output_dim is None:
+        if down_out:
+            output_dim = tuple((sensor_param[SensorParam.SHAPE] * 1 / down_out).astype(int))
+        else:
+            output_dim = sensor_param[SensorParam.SHAPE]
 
     ## load mnist dataset
     use_cuda = torch.cuda.is_available()
@@ -186,16 +220,14 @@ def train_slm_logistic_reg(
         deadspace=not simple,
         scene2mask=scene2mask,
         mask2sensor=mask2sensor,
-        device_mask_creation="cpu",  # TODO: bc doesn't fit on GPU
+        device_mask_creation=device_mask_creation,
         output_dim=output_dim,
-        sensor_activation=sensor_act,
+        sensor_activation=sensor_act_fn,
         multi_gpu=multi_gpu,
         dropout=dropout,
+        noise_type=noise_type,
+        snr=snr,
     )
-
-    # # TODO : doesn't work since PSF generation happens on CPU?
-    # if multi_gpu:
-    #     model = nn.parallel.DistributedDataParallel(model)
 
     if use_cuda:
         model = model.to(device)
@@ -228,8 +260,55 @@ def train_slm_logistic_reg(
     for var_name in optimizer.state_dict():
         print(var_name, "\t", optimizer.state_dict()[var_name])
 
+    ## save best model param
+    n_hidden = np.prod(output_dim)
+    timestamp = datetime.now().strftime("%d%m%Y_%Hh%M")
+    model_output_dir = f"./{os.path.basename(dataset)}_outdim{int(n_hidden)}_{n_epoch}epoch_seed{seed}_logistic_reg"
+    if noise_type:
+        model_output_dir += f"_{noise_type}{snr}"
+    model_output_dir += f"_{timestamp}"
+
+    model_output_dir = plib.Path(model_output_dir)
+    model_output_dir.mkdir(exist_ok=True)
+    model_file = model_output_dir / "state_dict.pth"
+    test_loss_fp = model_output_dir / "test_loss.npy"
+    test_acc_fp = model_output_dir / "test_acc.npy"
+
+    metadata = {
+        "dataset": join(dirname(dirname(abspath(__file__))), dataset),
+        "mean": mean,
+        "std": std,
+        "slm": slm,
+        "seed": seed,
+        "sensor": sensor,
+        "sensor_activation": sensor_act,
+        "model": model.name(),
+        "model_param": {
+            "input_shape": input_shape.tolist(),
+            "crop_fact": crop_fact,
+            "device": device,
+            "deadspace": not simple,
+            "scene2mask": scene2mask,
+            "mask2sensor": mask2sensor,
+            "device_mask_creation": device_mask_creation,
+            "output_dim": np.array(output_dim).tolist(),
+            "multi_gpu": multi_gpu,
+            "dropout": dropout,
+        },
+        "batch_size": batch_size,
+        "noise_type": noise_type,
+        "snr": None if noise_type is None else snr,
+    }
+    metadata_fp = model_output_dir / "metadata.json"
+    with open(metadata_fp, "w") as fp:
+        json.dump(metadata, fp)
+
     print("\nStart training...")
     start_time = time.time()
+    test_loss = []
+    test_accuracy = []
+    best_test_acc = 0
+    best_test_acc_epoch = 0
     for epoch in range(n_epoch):
         # training
         running_loss = 0.0
@@ -297,19 +376,43 @@ def train_slm_logistic_reg(
             correct_cnt += (pred_label == target.data).sum()
             running_loss += loss.item() / batch_size
         proc_time = (time.time() - start_time) / 60.0
+        _acc = (correct_cnt * 1.0 / total_cnt).item()
         print(
             "==>>> epoch: {}, , {:.2f} min, test loss: {:.6f}, acc: {:.3f}".format(
-                epoch + 1, proc_time, running_loss, correct_cnt * 1.0 / total_cnt
+                epoch + 1, proc_time, running_loss, _acc
             )
         )
+        test_loss.append(running_loss)
+        test_accuracy.append(_acc)
+
+        if _acc > best_test_acc:
+            # save model param
+            best_test_acc = _acc
+            best_test_acc_epoch = epoch + 1
+            torch.save(model.state_dict(), str(model_file))
+
+        # save losses
+        with open(test_loss_fp, "wb") as f:
+            np.save(f, np.array(test_loss))
+        with open(test_acc_fp, "wb") as f:
+            np.save(f, np.array(test_accuracy))
 
     proc_time = time.time() - start_time
     print(f"Processing time [m] : {proc_time / 60}")
     print("Finished Training")
 
-    # save model
-    PATH = f"./{os.path.basename(dataset)}_logistic_reg.pth"
-    torch.save(model.state_dict(), PATH)
+    # save model metadata
+    metadata.update(
+        {
+            "best_test_acc": best_test_acc,
+            "best_test_acc_epoch": best_test_acc_epoch,
+        }
+    )
+    metadata_fp = model_output_dir / "metadata.json"
+    with open(metadata_fp, "w") as fp:
+        json.dump(metadata, fp)
+
+    print(f"Model saved to : {str(model_output_dir)}")
 
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@ python scripts/save_simulated_dataset.py --psf psfs/adafruit.png
 
 Resized and scaled so that can be convolved with PSF during training
 ```
-python scripts/save_simulated_dataset.py --down_psf 2 --output_dir /scratch \
-    --n_files 100
+python scripts/save_simulated_dataset.py --down_psf 2 --output_dir  \
+--n_files 100
 ```
 
 """
@@ -65,10 +65,34 @@ BATCH = 1000  # how often to print progress
 )
 @click.option("--cpu", is_flag=True, help="Use CPU even if GPU if available.")
 @click.option("--down_out", type=float, help="Factor by which to downsample output.", default=128)
+@click.option(
+    "--output_dim",
+    default=None,
+    nargs=2,
+    type=int,
+    help="Output dimension (height, width). Use this instead of `down_out` if provided",
+)
 @click.option("--n_files", type=int, default=None)
 @click.option("--output_dir", type=str, default="data", help="Path to save augmented dataset.")
+@click.option("--object_height", type=float, help="Object height.", default=5e-2)
+@click.option("--scene2mask", type=float, default=0.4, help="Scene to SLM/mask distance in meters.")
+@click.option(
+    "--mask2sensor", type=float, default=0.004, help="SLM/mask to sensor distance in meters."
+)
 def save_simulated_dataset(
-    psf, down_psf, down_out, n_files, crop_output, rgb, single_psf, cpu, output_dir
+    psf,
+    down_psf,
+    down_out,
+    n_files,
+    crop_output,
+    rgb,
+    single_psf,
+    cpu,
+    output_dir,
+    object_height,
+    scene2mask,
+    mask2sensor,
+    output_dim,
 ):
     use_cuda = torch.cuda.is_available()
     if cpu:
@@ -91,6 +115,7 @@ def save_simulated_dataset(
         down_out = None
         OUTPUT_DIR = os.path.join(output_dir, f"MNIST_no_psf_down{int(down_psf)}")
 
+    OUTPUT_DIR += f"_height{object_height}"
     if n_files:
         OUTPUT_DIR += f"_{n_files}files"
     if rgb:
@@ -99,9 +124,6 @@ def save_simulated_dataset(
     print("\nSimulated dataset will be saved to :", OUTPUT_DIR)
 
     grayscale = not rgb
-    scene2mask = 40e-2
-    mask2sensor = 4e-3
-    object_height = 5e-2
 
     # RPi sensor dimension, TODO pass as param for different sensors
     pixel_size = np.array([1.55e-6, 1.55e-6])

@@ -6,7 +6,7 @@ ctypes = [torch.complex64, torch.complex128]
 
 
 class RealFFTConvolve2D:
-    def __init__(self, filter, mode=None, axes=(-2, -1)):
+    def __init__(self, filter, mode=None, axes=(-2, -1), img_shape=None):
         """
         Operator that performs convolution in Fourier domain, and assumes
         real-valued signals. Useful if convolving with the same filter, i.e.
@@ -15,18 +15,27 @@ class RealFFTConvolve2D:
         Parameters
         ----------
         filter array_like
-            2D filter to use. Must be of shape (height, width, channels) even if
+            2D filter to use. Must be of shape (channels, height, width) even if
             only one channel.
+        img_shape : tuple
+            If image different shape than filter, specify here.
         dtype : float32 or float64
             Data type to use for optimization.
         """
         assert torch.is_tensor(filter)
 
         self.filter_shape = filter.shape
-        if axes is None:
-            self.shape = [2 * self.filter_shape[i] - 1 for i in range(len(self.filter_shape))]
+        if img_shape is None:
+            self.img_shape = filter.shape
         else:
-            self.shape = [2 * self.filter_shape[i] - 1 for i in axes]
+            assert len(img_shape) == 3
+            self.img_shape = img_shape
+        if axes is None:
+            self.shape = [
+                self.filter_shape[i] + self.img_shape[i] - 1 for i in range(len(self.filter_shape))
+            ]
+        else:
+            self.shape = [self.filter_shape[i] + self.img_shape[i] - 1 for i in axes]
         self.axes = axes
         if mode is not None:
             if mode != "same":
@@ -38,14 +47,14 @@ class RealFFTConvolve2D:
         x_freq = torch.fft.rfftn(x, self.shape, dim=self.axes)
         ret = torch.fft.irfftn(self.filter_freq * x_freq, self.shape, dim=self.axes)
 
-        y_pad_edge = int((self.shape[0] - self.filter_shape[self.axes[0]]) / 2)
-        x_pad_edge = int((self.shape[1] - self.filter_shape[self.axes[1]]) / 2)
+        y_pad_edge = int((self.shape[0] - self.img_shape[self.axes[0]]) / 2)
+        x_pad_edge = int((self.shape[1] - self.img_shape[self.axes[1]]) / 2)
         return crop(
             ret,
             top=y_pad_edge,
             left=x_pad_edge,
-            height=self.filter_shape[self.axes[0]],
-            width=self.filter_shape[self.axes[1]],
+            height=self.img_shape[self.axes[0]],
+            width=self.img_shape[self.axes[1]],
         )
 
 

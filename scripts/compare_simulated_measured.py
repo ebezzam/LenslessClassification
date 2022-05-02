@@ -74,7 +74,7 @@ from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
     "--noise_type",
     default="speckle",
     type=click.Choice(["speckle", "gaussian", "s&p", "poisson"]),
-    help="Gradient descent update method.",
+    help="Noise type to add.",
 )
 @click.option("--noise_mean", default=0, type=float, help="Noise standard deviation.")
 @click.option("--noise_std", default=0.01, type=float, help="Noise standard deviation.")

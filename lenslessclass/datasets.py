@@ -1,3 +1,4 @@
+from multiprocessing.sharedctypes import Value
 from lensless.io import load_psf
 from lensless.util import resize, rgb2gray
 import cv2
@@ -13,6 +14,8 @@ from tqdm import tqdm
 from waveprop.devices import sensor_dict, SensorParam
 import time
 import pathlib as plib
+from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
+from skimage.util.noise import random_noise
 
 
 # TODO : abstract parent class for DatasetPropagated
@@ -96,9 +99,9 @@ class MNISTPropagated(datasets.MNIST):
         sensor_size,
         psf_fp=None,
         single_psf=False,
-        downsample_psf=None,  # default to psf dim, but could be too large
-        output_dim=None,  # default to conv_dim, but could be too large
-        crop_output=False,  # otherwise downsample output
+        downsample_psf=None,
+        output_dim=None,
+        crop_psf=False,
         vflip=True,
         grayscale=True,
         device=None,
@@ -108,34 +111,67 @@ class MNISTPropagated(datasets.MNIST):
         scale=(1, 1),
         dtype=np.float32,
         dtype_out=torch.uint8,  # simulate quantization of sensor
-        fov=None,
-        offset=None,
+        noise_type=None,
+        snr=40,
         **kwargs,
     ):
-
+        """
+        downsample_psf : float
+            Downsample PSF to do smaller convolution.
+        crop_psf : int
+            To be used for lens PSF! How much to crop around peak of lens to extract the PSF.
+        """
+        self.dtype = dtype
         self.dtype_out = dtype_out
 
         # -- load PSF
         if psf_fp is not None:
             psf = load_psf(fp=psf_fp, single_psf=single_psf, dtype=dtype)
 
-            # resize
-            if downsample_psf:
-                psf = resize(psf, 1 / downsample_psf, interpolation=cv2.INTER_LINEAR).astype(dtype)
-            self.conv_dim = np.array(psf.shape[:2])
+            if crop_psf:
+                # for compact support PSF like lens
+                # -- keep full convolution
+                self.conv_dim = np.array(psf.shape)
 
-            # cast as torch array
-            if grayscale:
+                # -- crop PSF around peak
+                center = np.unravel_index(np.argmax(psf, axis=None), psf.shape)
+                top = int(center[0] - crop_psf / 2)
+                left = int(center[1] - crop_psf / 2)
+                psf = psf[top : top + crop_psf, left : left + crop_psf]
+
+            else:
+                # for PSFs with large support, e.g. lensless
+                if downsample_psf:
+                    psf = resize(psf, 1 / downsample_psf, interpolation=cv2.INTER_CUBIC).astype(
+                        dtype
+                    )
+                    if single_psf:
+                        # cv2 drops the last dimension when it's 1..
+                        psf = psf[:, :, np.newaxis]
+                self.conv_dim = np.array(psf.shape)
+
+            # reorder axis to [channels, width, height]
+            if grayscale and not single_psf:
                 psf = rgb2gray(psf).astype(dtype)
+                psf = psf[np.newaxis, :, :]
+                self.conv_dim[2] = 1
+                # if psf.shape[0] == 3:
+                #     psf = rgb2gray(psf).astype(dtype)
+                # else:
+                #     psf = psf.squeeze()
             else:
                 psf = np.transpose(psf, (2, 0, 1))
+
+            # cast as torch array
             psf = torch.tensor(psf, device=device)
         else:
             # output dimensions is same as dimension of convolution
             psf = None
             assert output_dim is not None
             self.conv_dim = np.array(output_dim)
+        self.psf = psf
 
+        # processing steps
         # -- convert to tensor and flip image if need be
         self.input_dim = np.array([28, 28])
         transform_list = [np.array, transforms.ToTensor()]
@@ -146,18 +182,14 @@ class MNISTPropagated(datasets.MNIST):
         magnification = mask2sensor / scene2mask
         self.scene_dim = sensor_size / magnification
         object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
-        # if psf is not None:
-        #     object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
-        # else:
-        #     object_height_pix = int(np.round(object_height / self.scene_dim[1] * output_dim[1]))
         scaling = object_height_pix / self.input_dim[1]
         object_dim = (np.round(self.input_dim * scaling)).astype(int).tolist()
         transform_list.append(
             transforms.RandomResizedCrop(size=object_dim, ratio=(1, 1), scale=scale)
         )
 
-        # pad rest with zeros
-        padding = self.conv_dim - object_dim
+        # -- pad rest with zeros
+        padding = self.conv_dim[:2] - object_dim
         left = padding[1] // 2
         right = padding[1] - left
         top = padding[0] // 2
@@ -171,24 +203,11 @@ class MNISTPropagated(datasets.MNIST):
 
         # -- to do convolution on GPU (must faster)
         self._transform_post = None
-        if psf is not None:
+        if self.psf is not None:
             self._transform_post = []
 
-            conv_op = RealFFTConvolve2D(psf)
+            conv_op = RealFFTConvolve2D(self.psf, img_shape=np.roll(self.conv_dim, shift=1))
             self._transform_post.append(conv_op)
-
-            if crop_output:
-                # remove previous padding
-                center = (psf == torch.max(psf)).nonzero().cpu().numpy()[0]
-
-                def crop(img):
-                    top = int(center[0] - object_dim[0] / 2)
-                    left = int(center[1] - object_dim[1] / 2)
-                    return transforms.functional.crop(
-                        img, top=top, left=left, height=object_dim[0], width=object_dim[1]
-                    )
-
-                self._transform_post.append(crop)
 
             # -- resize to output dimension
             # more manageable to train on and perhaps don't need so many DOF
@@ -196,6 +215,30 @@ class MNISTPropagated(datasets.MNIST):
                 self._transform_post.append(transforms.Resize(size=output_dim))
 
             self._transform_post = transforms.Compose(self._transform_post)
+
+        # -- param to add noise
+        if noise_type is not None:
+            # TODO : hardcoded for Raspberry Pi HQ sensor
+            bit_depth = 12
+            noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
+
+            def add_noise(measurement):
+
+                # noise_std = np.random.uniform(low=0.001, high=0.01)
+                # return random_noise(
+                #     measurement, mode=noise_type, clip=False, mean=noise_mean, var=noise_std**2
+                # )
+
+                # measurement is intensity
+                sig_var = np.linalg.norm(measurement)
+                noise_var = sig_var / (10 ** (snr / 10))
+                return random_noise(
+                    measurement, mode=noise_type, clip=False, mean=noise_mean, var=noise_var**2
+                )
+
+            self.add_noise = add_noise
+        else:
+            self.add_noise = None
 
         self.device = device
         super().__init__(root=root, train=train, download=download, transform=transform)
@@ -211,6 +254,10 @@ class MNISTPropagated(datasets.MNIST):
         if self._transform_post:
             img = self._transform_post(img)
 
+        if self.add_noise is not None:
+            # noise = self.get_noise(img).astype(self.dtype)
+            img = torch.tensor(self.add_noise(img.cpu().numpy()).astype(self.dtype))
+
         # cast to uint8 as on sensor
         if img.max() > 1:
             # todo: clip instead?
@@ -219,6 +266,247 @@ class MNISTPropagated(datasets.MNIST):
         img = img.to(dtype=self.dtype_out)
 
         return img, res[1]
+
+
+""""
+CelebA: https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html
+"""
+
+CELEBA_ATTR = [
+    "5_o_Clock_Shadow",
+    "Arched_Eyebrows",
+    "Attractive",
+    "Bags_Under_Eyes",
+    "Bald",
+    "Bangs",
+    "Big_Lips",
+    "Big_Nose",
+    "Black_Hair",
+    "Blond_Hair",
+    "Blurry",
+    "Brown_Hair",
+    "Bushy_Eyebrows",
+    "Chubby",
+    "Double_Chin",
+    "Eyeglasses",
+    "Goatee",
+    "Gray_Hair",
+    "Heavy_Makeup",
+    "High_Cheekbones",
+    "Male",
+    "Mouth_Slightly_Open",
+    "Mustache",
+    "Narrow_Eyes",
+    "No_Beard",
+    "Oval_Face",
+    "Pale_Skin",
+    "Pointy_Nose",
+    "Receding_Hairline",
+    "Rosy_Cheeks",
+    "Sideburns",
+    "Smiling",
+    "Straight_Hair",
+    "Wavy_Hair",
+    "Wearing_Earrings",
+    "Wearing_Hat",
+    "Wearing_Lipstick",
+    "Wearing_Necklace",
+    "Wearing_Necktie",
+    "Young",
+]
+
+
+class CelebAPropagated(datasets.CelebA):
+    def __init__(
+        self,
+        object_height,
+        scene2mask,
+        mask2sensor,
+        sensor_size,
+        attribute=None,
+        psf_fp=None,
+        single_psf=False,
+        downsample_psf=None,
+        output_dim=None,
+        crop_psf=False,
+        vflip=True,
+        grayscale=True,
+        device=None,
+        root="./data",
+        split="train",
+        scale=(1, 1),
+        dtype=np.float32,
+        dtype_out=torch.uint8,  # simulate quantization of sensor
+        noise_type=None,
+        snr=40,
+        **kwargs,
+    ):
+        """
+        attribute : str
+            Attribute to use as label (from `CELEBA_ATTR`). Default is to return all.
+        split : str
+            One of {'train', 'valid', 'test', 'all'}.
+        downsample_psf : float
+            Downsample PSF to do smaller convolution.
+        crop_psf : int
+            To be used for lens PSF! How much to crop around peak of lens to extract the PSF.
+        """
+        self.dtype = dtype
+        self.dtype_out = dtype_out
+
+        # -- load PSF
+        if psf_fp is not None:
+            psf = load_psf(fp=psf_fp, single_psf=single_psf, dtype=dtype)
+
+            if crop_psf:
+                # for compact support PSF like lens
+                # -- keep full convolution
+                self.conv_dim = np.array(psf.shape)
+
+                # -- crop PSF around peak
+                center = np.unravel_index(np.argmax(psf, axis=None), psf.shape)
+                top = int(center[0] - crop_psf / 2)
+                left = int(center[1] - crop_psf / 2)
+                psf = psf[top : top + crop_psf, left : left + crop_psf]
+
+            else:
+                # for PSFs with large support, e.g. lensless
+                if downsample_psf:
+                    psf = resize(psf, 1 / downsample_psf, interpolation=cv2.INTER_CUBIC).astype(
+                        dtype
+                    )
+                    if single_psf:
+                        # cv2 drops the last dimension when it's 1..
+                        psf = psf[:, :, np.newaxis]
+                self.conv_dim = np.array(psf.shape)
+
+            # reorder axis to [channels, width, height]
+            if grayscale and not single_psf:
+                psf = rgb2gray(psf).astype(dtype)
+                psf = psf[np.newaxis, :, :]
+                self.conv_dim[2] = 1
+                # if psf.shape[0] == 3:
+                #     psf = rgb2gray(psf).astype(dtype)
+                # else:
+                #     psf = psf.squeeze()
+            else:
+                psf = np.transpose(psf, (2, 0, 1))
+
+            # cast as torch array
+            psf = torch.tensor(psf, device=device)
+        else:
+            # output dimensions is same as dimension of convolution
+            psf = None
+            assert output_dim is not None
+            self.conv_dim = np.array(output_dim)
+        self.psf = psf
+
+        # processing steps
+        # -- convert to tensor and flip image if need be
+        self.input_dim = np.array([28, 28])
+        transform_list = [np.array, transforms.ToTensor()]
+        if vflip:
+            transform_list.append(transforms.RandomVerticalFlip(p=1.0))
+
+        # -- resize to convolution dimension and scale to desired height at object plane
+        magnification = mask2sensor / scene2mask
+        self.scene_dim = sensor_size / magnification
+        object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
+        scaling = object_height_pix / self.input_dim[1]
+        object_dim = (np.round(self.input_dim * scaling)).astype(int).tolist()
+        transform_list.append(
+            transforms.RandomResizedCrop(size=object_dim, ratio=(1, 1), scale=scale)
+        )
+
+        # -- pad rest with zeros
+        padding = self.conv_dim[:2] - object_dim
+        left = padding[1] // 2
+        right = padding[1] - left
+        top = padding[0] // 2
+        bottom = padding[0] - top
+        transform_list.append(transforms.Pad(padding=(left, top, right, bottom)))
+
+        if grayscale:
+            transform_list.append(transforms.Grayscale(num_output_channels=1))
+
+        transform = transforms.Compose(transform_list)
+
+        # -- to do convolution on GPU (must faster)
+        self._transform_post = None
+        if self.psf is not None:
+            self._transform_post = []
+
+            conv_op = RealFFTConvolve2D(self.psf, img_shape=np.roll(self.conv_dim, shift=1))
+            self._transform_post.append(conv_op)
+
+            # -- resize to output dimension
+            # more manageable to train on and perhaps don't need so many DOF
+            if output_dim:
+                self._transform_post.append(transforms.Resize(size=output_dim))
+
+            self._transform_post = transforms.Compose(self._transform_post)
+
+        # -- param to add noise
+        if noise_type is not None:
+            # hardcoded for Raspberry Pi
+            bit_depth = 12
+            noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
+
+            def add_noise(measurement):
+
+                # measurement is intensity
+                sig_var = np.linalg.norm(measurement)
+                noise_var = sig_var / (10 ** (snr / 10))
+                return random_noise(
+                    measurement, mode=noise_type, clip=False, mean=noise_mean, var=noise_var**2
+                )
+
+            self.add_noise = add_noise
+        else:
+            self.add_noise = None
+
+        self.device = device
+        super().__init__(root=root, split=split, download=False, transform=transform)
+
+        # index extract label
+        self.label = attribute
+        if attribute is not None:
+            self.label = self.attr_names.index(attribute)
+            # for i, _val in enumerate(super().attr_names):
+            #     if _val == label:
+            #         metadata_idx = i
+            #         break
+            # assert metadata_idx is not None
+
+    def __getitem__(self, index):
+
+        res = super().__getitem__(index)
+        if self.device:
+            img = res[0].to(device=self.device)
+        else:
+            img = res[0]
+
+        if self._transform_post:
+            img = self._transform_post(img)
+
+        if self.add_noise is not None:
+            # noise = self.get_noise(img).astype(self.dtype)
+            img = torch.tensor(self.add_noise(img.cpu().numpy()).astype(self.dtype))
+
+        # cast to uint8 as on sensor
+        if img.max() > 1:
+            # todo: clip instead?
+            img /= img.max()
+        img *= 255
+        img = img.to(dtype=self.dtype_out)
+
+        # extract desired label
+        if self.label is not None:
+            label = res[1][self.label]
+        else:
+            label = res[1]
+
+        return img, label
 
 
 def get_object_height_pix(object_height, mask2sensor, scene2mask, sensor_dim, target_dim):
@@ -258,6 +546,10 @@ def simulate_propagated_dataset(
     batch=1000,
     n_files=None,
     return_output_dir=False,
+    output_dim=None,
+    crop_psf=None,
+    noise_type=None,
+    snr=40,
 ):
     """
     output_dir : str
@@ -265,7 +557,19 @@ def simulate_propagated_dataset(
     """
 
     psf_bn = os.path.basename(psf).split(".")[0]
-    output_dir = os.path.join(output_dir, f"MNIST_{psf_bn}_down{int(down_out)}")
+    if output_dim:
+        n_hidden = np.prod(output_dim)
+        output_dir = os.path.join(
+            output_dir, f"MNIST_{psf_bn}_outdim{int(n_hidden)}_height{object_height}"
+        )
+    else:
+        output_dir = os.path.join(
+            output_dir, f"MNIST_{psf_bn}_down{int(down_out)}_height{object_height}"
+        )
+    if noise_type:
+        output_dir += f"_{noise_type}{snr}"
+    if crop_psf:
+        output_dir += f"_croppsf{crop_psf}"
     if n_files:
         output_dir += f"_{n_files}files"
     if not grayscale:
@@ -277,8 +581,11 @@ def simulate_propagated_dataset(
     print("\nSimulated dataset will be saved to :", output_dir)
 
     sensor_param = sensor_dict[sensor]
-    if down_out:
-        output_dim = tuple((sensor_param[SensorParam.SHAPE] * 1 / down_out).astype(int))
+    if output_dim is None:
+        if down_out:
+            output_dim = tuple((sensor_param[SensorParam.SHAPE] * 1 / down_out).astype(int))
+        else:
+            output_dim = sensor_param[SensorParam.SHAPE]
 
     ds_train = MNISTPropagated(
         psf_fp=psf,
@@ -294,6 +601,9 @@ def simulate_propagated_dataset(
         vflip=False,
         train=True,
         single_psf=single_psf,
+        crop_psf=crop_psf,
+        noise_type=noise_type,
+        snr=snr,
     )
     ds_test = MNISTPropagated(
         psf_fp=psf,
@@ -309,6 +619,9 @@ def simulate_propagated_dataset(
         vflip=False,
         train=False,
         single_psf=single_psf,
+        crop_psf=crop_psf,
+        noise_type=noise_type,
+        snr=snr,
     )
 
     ## loop over samples and save
