@@ -12,6 +12,7 @@ from waveprop.color import ColorSystem
 from waveprop.rs import angular_spectrum
 from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
 from skimage.util.noise import random_noise
+from scipy import ndimage
 
 
 class MultiClassLogistic(nn.Module):
@@ -36,6 +37,25 @@ class MultiClassLogistic(nn.Module):
 
     def name(self):
         return "MultiClassLogistic"
+
+
+class BinaryLogistic(nn.Module):
+    def __init__(self, input_shape, multi_gpu=False):
+        super(BinaryLogistic, self).__init__()
+        self.flatten = nn.Flatten()
+        self.linear1 = nn.Linear(int(np.prod(input_shape)), 1)
+        self.decision = nn.Sigmoid()
+
+        if multi_gpu:
+            self.linear1 = nn.DataParallel(self.linear1)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.linear1(x)
+        return self.decision(x)
+
+    def name(self):
+        return "BinaryLogistic"
 
 
 class SingleHidden(nn.Module):
@@ -127,46 +147,47 @@ class SLMMultiClassLogistic(nn.Module):
 
             def add_noise(measurement):
 
-                measurement_copy = measurement.clone().cpu().detach().numpy()
-                sig_var = np.linalg.norm(measurement_copy, axis=(-2, -1))
-                noise = []
-                for i, _val in enumerate(sig_var):
+                # normalize as mean is normalized to max value 1
+                with torch.no_grad():
+                    max_vals = torch.max(torch.flatten(measurement, start_dim=1), dim=1)[0]
+                    max_vals = max_vals.unsqueeze(1).unsqueeze(1).unsqueeze(1)
+                measurement /= max_vals
 
-                    noise_var = _val / (10 ** (snr / 10))
+                # sig_var = np.linalg.norm(measurement_np, axis=(-2, -1))
+                # noise = []
+                # for i, _val in enumerate(sig_var):
+
+                #     noise_var = _val / (10 ** (snr / 10))
+                #     noise.append(
+                #         random_noise(
+                #             measurement_np[i],
+                #             mode=noise_type,
+                #             clip=False,
+                #             mean=noise_mean,
+                #             var=noise_var**2,
+                #         )
+                #         - measurement_np[i]
+                #     )
+
+                # compute noise for each image
+                measurement_np = measurement.clone().cpu().detach().numpy()
+                noise = []
+                for _measurement in measurement_np:
+
+                    sig_var = ndimage.variance(_measurement)
+                    noise_var = sig_var / (10 ** (snr / 10))
                     noise.append(
                         random_noise(
-                            measurement_copy[i],
+                            _measurement,
                             mode=noise_type,
                             clip=False,
                             mean=noise_mean,
-                            var=noise_var**2,
+                            var=noise_var,
                         )
-                        - measurement_copy[i]
-                        # random_noise(
-                        #     measurement_copy[i],
-                        #     mode=noise_type,
-                        #     clip=False,
-                        #     mean=noise_mean,
-                        #     var=noise_var**2,
-                        # )
+                        - _measurement
                     )
 
                 noise = torch.tensor(np.array(noise).astype(np.float32)).to(device)
-
-                # import pudb; pudb.set_trace()
-
-                # # measurement is intensity
-                # sig_var = np.linalg.norm(measurement)
-                # noise_var = sig_var / (10 ** (snr / 10))
-                # noise = torch.tensor(
-                #     random_noise(
-                #         measurement,
-                #         mode=noise_type,
-                #         clip=False,
-                #         mean=noise_mean,
-                #         var=noise_var**2,
-                #     ).astype(np.float32)
-                # ).to(device)
 
                 return measurement + noise
 

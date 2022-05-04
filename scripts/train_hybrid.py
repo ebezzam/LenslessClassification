@@ -17,9 +17,11 @@ python scripts/train_slm_logistic_reg.py  \
 
 """
 
+from curses import meta
 from lenslessclass.models import SLMMultiClassLogistic
 import torch
 import random
+from pprint import pprint
 import pathlib as plib
 import os
 import torch.nn as nn
@@ -33,6 +35,7 @@ import numpy as np
 import json
 from os.path import dirname, abspath, join
 from datetime import datetime
+from lenslessclass.datasets import simulate_propagated_dataset
 
 
 @click.command()
@@ -40,6 +43,11 @@ from datetime import datetime
     "--dataset",
     type=str,
     help="Path to dataset.",
+)
+@click.option(
+    "--cont",
+    type=str,
+    help="Path to training to continue.",
 )
 @click.option("--seed", type=int, help="Random seed.", default=0)
 @click.option("--slm", type=str, help="Which SLM to use.", default=SLMOptions.ADAFRUIT.value)
@@ -50,12 +58,15 @@ from datetime import datetime
     default=0.7,
     help="Fraction of sensor that is left uncropped, centered.",
 )
+@click.option(
+    "--output_dir", type=str, default="data", help="Path to save augmented dataset (if created)."
+)
 @click.option("--simple", is_flag=True, help="Don't take into account deadspace.")
 @click.option("--scene2mask", type=float, default=0.4, help="Scene to SLM/mask distance in meters.")
 @click.option(
     "--mask2sensor", type=float, default=0.004, help="SLM/mask to sensor distance in meters."
 )
-@click.option("--cpu", is_flag=True, help="Use CPU even if GPU if available.")
+@click.option("--object_height", type=float, default=0.12, help="Object height in meters.")
 @click.option("--lr", type=float, help="Learning rate for SGD.", default=0.01)
 @click.option("--momentum", type=float, help="Momentum for SGD.", default=0.01)
 @click.option("--n_epoch", type=int, help="Number of epochs to train.", default=10)
@@ -87,7 +98,7 @@ from datetime import datetime
     "--opti",
     type=click.Choice(["sgd", "adam"], case_sensitive=False),
     help="Optimizer.",
-    default="sgd",
+    default="adam",
 )
 @click.option(
     "--std",
@@ -103,11 +114,21 @@ from datetime import datetime
 @click.option("--snr", default=40, type=float, help="SNR to determine noise to add.")
 @click.option("--down_out", type=float, help="Factor by which to downsample output.", default=128)
 @click.option(
+    "--down_psf", type=float, help="Factor by which to downsample convolution.", default=8
+)
+@click.option(
     "--output_dim",
     default=None,
     nargs=2,
     type=int,
     help="Output dimension (height, width). Use this instead of `down_out` if provided",
+)
+@click.option("--n_files", type=int, default=None)
+@click.option("--device", type=str, help="Main device for training.")
+@click.option(
+    "--single_gpu",
+    is_flag=True,
+    help="Whether to use single GPU is multiple available. Default will try using all.",
 )
 def train_slm_logistic_reg(
     dataset,
@@ -117,7 +138,6 @@ def train_slm_logistic_reg(
     simple,
     scene2mask,
     mask2sensor,
-    cpu,
     lr,
     momentum,
     n_epoch,
@@ -125,6 +145,7 @@ def train_slm_logistic_reg(
     mean,
     std,
     down_out,
+    down_psf,
     print_epoch,
     sensor_act,
     opti,
@@ -133,7 +154,42 @@ def train_slm_logistic_reg(
     noise_type,
     snr,
     output_dim,
+    cont,
+    object_height,
+    output_dir,
+    n_files,
+    device,
+    single_gpu,
 ):
+
+    if cont:
+        cont = plib.Path(cont)
+        print(f"\nCONTINUTING TRAINING FOR {n_epoch} EPOCHS")
+        f = open(str(cont / "metadata.json"))
+        metadata = json.load(f)
+        pprint(metadata)
+
+        dataset = metadata["dataset"]
+        mean = metadata["mean"]
+        std = metadata["std"]
+        slm = metadata["slm"]
+        seed = metadata["seed"]
+        sensor = metadata["sensor"]
+        sensor_act = metadata["sensor_activation"]
+        batch_size = metadata["batch_size"]
+        noise_type = metadata["noise_type"]
+        snr = metadata["snr"]
+        input_shape = np.array(metadata["model_param"]["input_shape"])
+        crop_fact = metadata["model_param"]["crop_fact"]
+        device = metadata["model_param"]["device"]
+        simple = not metadata["model_param"]["deadspace"]
+        scene2mask = metadata["model_param"]["scene2mask"]
+        mask2sensor = metadata["model_param"]["mask2sensor"]
+        device_mask_creation = metadata["model_param"]["device_mask_creation"]
+        output_dim = metadata["model_param"]["output_dim"]
+        multi_gpu = metadata["model_param"]["multi_gpu"]
+        dropout = metadata["model_param"]["dropout"]
+
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
@@ -165,15 +221,13 @@ def train_slm_logistic_reg(
 
     ## load mnist dataset
     use_cuda = torch.cuda.is_available()
-    if cpu:
-        device = "cpu"
-        use_cuda = False
-    else:
+    multi_gpu = False
+    if device is None:
         if use_cuda:
             print("CUDA available, using GPU.")
             device = "cuda"
             n_gpus = torch.cuda.device_count()
-            if n_gpus > 1:
+            if n_gpus > 1 and not single_gpu:
                 multi_gpu = True
                 print(f"-- using {n_gpus} GPUs")
             else:
@@ -182,6 +236,32 @@ def train_slm_logistic_reg(
         else:
             device = "cpu"
             print("CUDA not available, using CPU.")
+    else:
+        if device == "cpu":
+            use_cuda = False
+        if use_cuda:
+            n_gpus = torch.cuda.device_count()
+            if n_gpus > 1 and not single_gpu:
+                multi_gpu = True
+                print(f"-- using {n_gpus} GPUs")
+
+    # check if need to create dataset
+    if dataset is None:
+        dataset = simulate_propagated_dataset(
+            dataset="MNIST",
+            down_psf=down_psf,
+            sensor=sensor,
+            down_out=None,  # done during training
+            scene2mask=scene2mask,
+            mask2sensor=mask2sensor,
+            object_height=object_height,
+            device=device,
+            crop_output=False,
+            grayscale=True,
+            single_psf=False,
+            output_dir=output_dir,
+            n_files=n_files,
+        )
 
     # -- first determine mean and standard deviation (of training set)
     if mean is None and std is None:
@@ -231,6 +311,11 @@ def train_slm_logistic_reg(
 
     if use_cuda:
         model = model.to(device)
+
+    if cont:
+        state_dict_fp = str(cont / "state_dict.pth")
+        model.load_state_dict(torch.load(state_dict_fp))
+        model.compute_intensity_psf()
 
     # set optimizer
     # TODO : set different learning rates: https://pytorch.org/docs/stable/optim.html
@@ -305,10 +390,16 @@ def train_slm_logistic_reg(
 
     print("\nStart training...")
     start_time = time.time()
-    test_loss = []
-    test_accuracy = []
-    best_test_acc = 0
-    best_test_acc_epoch = 0
+    if cont:
+        test_loss = list(np.load(str(cont / "test_loss.npy")))
+        test_accuracy = list(np.load(str(cont / "test_acc.npy")))
+        best_test_acc = np.max(test_accuracy)
+        best_test_acc_epoch = np.argmax(test_accuracy) + 1
+    else:
+        test_loss = []
+        test_accuracy = []
+        best_test_acc = 0
+        best_test_acc_epoch = 0
     for epoch in range(n_epoch):
         # training
         running_loss = 0.0
@@ -366,7 +457,7 @@ def train_slm_logistic_reg(
 
             # get inputs
             if use_cuda:
-                x, target = x.cuda(), target.cuda()
+                x, target = x.to(device), target.to(device)
 
             # forward, and compute loss
             out = model(x)

@@ -6,7 +6,7 @@ ctypes = [torch.complex64, torch.complex128]
 
 
 class RealFFTConvolve2D:
-    def __init__(self, filter, mode=None, axes=(-2, -1), img_shape=None):
+    def __init__(self, filter, mode=None, axes=(-2, -1), img_shape=None, device=None):
         """
         Operator that performs convolution in Fourier domain, and assumes
         real-valued signals. Useful if convolving with the same filter, i.e.
@@ -23,6 +23,9 @@ class RealFFTConvolve2D:
             Data type to use for optimization.
         """
         assert torch.is_tensor(filter)
+        if device is not None:
+            filter = filter.to(device)
+        self.device = device
 
         self.filter_shape = filter.shape
         if img_shape is None:
@@ -44,6 +47,9 @@ class RealFFTConvolve2D:
         self.filter_freq = torch.fft.rfftn(filter, self.shape, dim=axes)
 
     def __call__(self, x):
+        orig_device = x.device
+        if self.device is not None:
+            x = x.to(self.device)
         x_freq = torch.fft.rfftn(x, self.shape, dim=self.axes)
         ret = torch.fft.irfftn(self.filter_freq * x_freq, self.shape, dim=self.axes)
 
@@ -55,7 +61,7 @@ class RealFFTConvolve2D:
             left=x_pad_edge,
             height=self.img_shape[self.axes[0]],
             width=self.img_shape[self.axes[1]],
-        )
+        ).to(orig_device)
 
 
 def fftconvolve(in1, in2, mode=None, axes=None):
