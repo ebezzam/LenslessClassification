@@ -221,6 +221,8 @@ def train_hybrid(
     rotate,
     perspective,
 ):
+    if n_files == 0:
+        n_files = None
 
     if cont:
         cont = plib.Path(cont)

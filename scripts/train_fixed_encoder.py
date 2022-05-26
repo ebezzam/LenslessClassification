@@ -201,6 +201,8 @@ def train_fixed_encoder(
     rotate,
     perspective,
 ):
+    if n_files == 0:
+        n_files = None
 
     if cont:
         cont = plib.Path(cont)
