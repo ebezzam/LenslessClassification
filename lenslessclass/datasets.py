@@ -33,7 +33,7 @@ except RuntimeError:
 
 
 # TODO : abstract parent class for DatasetPropagated
-# TODO : take into account FOV and offset
+# TODO : take into account FOV
 
 
 class MNISTAugmented(Dataset):
@@ -144,11 +144,6 @@ class MNISTPropagated(datasets.MNIST):
             Downsample PSF to do smaller convolution.
         crop_psf : int
             To be used for lens PSF! How much to crop around peak of lens to extract the PSF.
-
-        TODO : interesting transformations
-        - Random perspective: https://pytorch.org/vision/main/auto_examples/plot_transforms.html#randomperspective
-        - Random rotation: https://pytorch.org/vision/main/auto_examples/plot_transforms.html#randomperspective
-
 
         """
         self.dtype = dtype
@@ -326,14 +321,6 @@ class MNISTPropagated(datasets.MNIST):
                     else:
                         noise_mean = 0
                     transform_list.append(AddNoise(snr, noise_type, noise_mean, dtype))
-
-            # # -- add noise at sensor
-            # if noise_type is not None:
-            #     # TODO : hardcoded for Raspberry Pi HQ sensor
-            #     bit_depth = 12
-            #     noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
-
-            #     self._transform_post.append(AddNoise(snr, noise_type, noise_mean, dtype))
 
             self._transform_post = transforms.Compose(self._transform_post)
 

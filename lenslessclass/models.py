@@ -440,8 +440,6 @@ class SLMMultiClassLogistic(nn.Module):
             warnings.warn("Got negative data. Shift to non-negative.")
             x -= x.min()
 
-        # TODO : compute PSF here?? on in training loop to give user
-        #  flexibility of how often to update SLM mask
         # - convolve with intensity PSF
         x = fftconvolve(x, self._psf, axes=(-2, -1))
 
@@ -478,10 +476,6 @@ class SLMMultiClassLogistic(nn.Module):
         return logits
 
     def compute_intensity_psf(self):
-        """
-        TODO precompute things when first called!! spherical prop, H matrix, etc
-        :return:
-        """
 
         # -- get SLM mask, i.e. deadspace modeling, quantization (todo), non-linearities (todo), etc
         mask = get_slm_mask(
@@ -496,29 +490,13 @@ class SLMMultiClassLogistic(nn.Module):
             first_color=self.first_color,
             requires_grad=self.requires_grad,
         )
-
-        # TODO can variable be on different device
         mask = mask.to(self.device)
 
         # apply mask
         u_in = mask * self.spherical_wavefront
 
         # mask to sensor
-        # if self._H_exp is None:
-        #     # pre-compute H_exp if trying to optimize distance, TODO check if mask2sensor is a tensor
-        #     self._H_exp = torch.zeros(
-        #         [3] + list(self.input_shape * 2), dtype=self.ctype, device=self.device
-        #     )
-        #     for i in range(self.color_system.n_wavelength):
-        #         self._H_exp[i] = angular_spectrum(
-        #             u_in=u_in[i],
-        #             wv=self.color_system.wv[i],
-        #             d1=self.d1,
-        #             dz=self.mask2sensor,
-        #             dtype=self.dtype,
-        #             device=self.device,
-        #             return_H_exp=True,
-        #         )
+
         if self._H is None:
             # TODO : benchmark how much it actually saves
             self._H = torch.zeros(
