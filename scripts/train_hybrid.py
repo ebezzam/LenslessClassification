@@ -17,7 +17,8 @@ python scripts/train_slm_logistic_reg.py  \
 
 """
 
-from curses import meta
+from collections import OrderedDict
+from multiprocessing.sharedctypes import Value
 from lenslessclass.models import SLMMultiClassLogistic
 import torch
 import random
@@ -36,6 +37,7 @@ import json
 from os.path import dirname, abspath, join
 from datetime import datetime
 from lenslessclass.datasets import simulate_propagated_dataset
+from lenslessclass.util import device_checks
 
 
 @click.command()
@@ -55,7 +57,7 @@ from lenslessclass.datasets import simulate_propagated_dataset
 @click.option(
     "--crop_fact",
     type=float,
-    default=0.7,
+    default=0.8,
     help="Fraction of sensor that is left uncropped, centered.",
 )
 @click.option(
@@ -78,11 +80,6 @@ from lenslessclass.datasets import simulate_propagated_dataset
     default=None,
 )
 @click.option(
-    "--mean",
-    type=float,
-    help="Mean of original dataset to normalize, if not provided it will be computed.",
-)
-@click.option(
     "--sensor_act",
     type=str,
     help="Activation at sensor. If not provided, none will applied.",
@@ -92,13 +89,18 @@ from lenslessclass.datasets import simulate_propagated_dataset
     "--dropout",
     default=None,
     type=float,
-    help="Percentage of dropout after diffractive optical layer.",
+    help="Percentage of dropout after first linear layer (if there's on that follows).",
 )
 @click.option(
     "--opti",
     type=click.Choice(["sgd", "adam"], case_sensitive=False),
     help="Optimizer.",
     default="adam",
+)
+@click.option(
+    "--mean",
+    type=float,
+    help="Mean of original dataset to normalize, if not provided it will be computed.",
 )
 @click.option(
     "--std",
@@ -111,17 +113,21 @@ from lenslessclass.datasets import simulate_propagated_dataset
     type=click.Choice(["speckle", "gaussian", "s&p", "poisson"]),
     help="Noise type to add.",
 )
-@click.option("--snr", default=40, type=float, help="SNR to determine noise to add.")
-@click.option("--down_out", type=float, help="Factor by which to downsample output.", default=128)
 @click.option(
-    "--down_psf", type=float, help="Factor by which to downsample convolution.", default=8
+    "--down_orig",
+    type=float,
+    help="Amount to downsample original number of input dimensions.",
+)
+@click.option("--snr", default=40, type=float, help="SNR to determine noise to add.")
+@click.option("--down_out", type=float, help="Factor by which to downsample output.", default=None)
+@click.option(
+    "--down",
+    default="resize",
+    type=click.Choice(["resize", "max", "avg"], case_sensitive=False),
+    help="Method for downsampling / reducing dimension.",
 )
 @click.option(
-    "--output_dim",
-    default=None,
-    nargs=2,
-    type=int,
-    help="Output dimension (height, width). Use this instead of `down_out` if provided",
+    "--down_psf", type=float, help="Factor by which to downsample convolution.", default=8
 )
 @click.option("--n_files", type=int, default=None)
 @click.option("--device", type=str, help="Main device for training.")
@@ -130,7 +136,52 @@ from lenslessclass.datasets import simulate_propagated_dataset
     is_flag=True,
     help="Whether to use single GPU is multiple available. Default will try using all.",
 )
-def train_slm_logistic_reg(
+@click.option(
+    "--hidden", type=int, default=None, help="If defined, add a hidden layer with this many units."
+)
+@click.option(
+    "--hidden2",
+    type=int,
+    default=None,
+    help="If defined, add a second hidden layer with this many units.",
+)
+@click.option(
+    "--min_val",
+    type=float,
+    default=None,
+    help="Minimum value from train set to make images non-negative. Default is to determine.",
+)
+@click.option(
+    "--fix_slm",
+    type=int,
+    default=-1,
+    help="Fix SLM make for this many epochs at the start.",
+)
+@click.option(
+    "--shift",
+    is_flag=True,
+    help="Whether to random shift object in scene.",
+)
+@click.option(
+    "--random_height",
+    default=None,
+    nargs=2,
+    type=float,
+    help="Random height range in cm.",
+)
+@click.option(
+    "--rotate",
+    default=False,
+    type=float,
+    help="Random degrees to rotate: (-rotate, rotate).",
+)
+@click.option(
+    "--perspective",
+    default=False,
+    type=float,
+    help="Distortion scale for random perspective.",
+)
+def train_hybrid(
     dataset,
     slm,
     sensor,
@@ -145,7 +196,9 @@ def train_slm_logistic_reg(
     mean,
     std,
     down_out,
+    down,
     down_psf,
+    down_orig,
     print_epoch,
     sensor_act,
     opti,
@@ -153,13 +206,20 @@ def train_slm_logistic_reg(
     seed,
     noise_type,
     snr,
-    output_dim,
     cont,
     object_height,
     output_dir,
     n_files,
     device,
     single_gpu,
+    hidden,
+    min_val,
+    fix_slm,
+    shift,
+    hidden2,
+    random_height,
+    rotate,
+    perspective,
 ):
 
     if cont:
@@ -186,14 +246,24 @@ def train_slm_logistic_reg(
         scene2mask = metadata["model_param"]["scene2mask"]
         mask2sensor = metadata["model_param"]["mask2sensor"]
         device_mask_creation = metadata["model_param"]["device_mask_creation"]
-        output_dim = metadata["model_param"]["output_dim"]
         multi_gpu = metadata["model_param"]["multi_gpu"]
         dropout = metadata["model_param"]["dropout"]
+        if "down" in metadata.keys():
+            down = metadata["down"]
+        if "down_orig" in metadata.keys():
+            down_orig = metadata["down_orig"]
+        if "hidden" in metadata["model_param"].keys():
+            hidden = metadata["model_param"]["hidden"]
+        if "hidden2" in metadata["model_param"].keys():
+            hidden2 = metadata["model_param"]["hidden2"]
+        if "min_val" in metadata.keys():
+            min_val = metadata["min_val"]
 
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
 
+    device, use_cuda, multi_gpu, device_ids = device_checks(device=device, single_gpu=single_gpu)
     device_mask_creation = "cpu"  # TODO: bc doesn't fit on GPU
 
     if print_epoch is None:
@@ -213,39 +283,18 @@ def train_slm_logistic_reg(
 
     sensor_param = sensor_dict[sensor]
 
-    if output_dim is None:
-        if down_out:
-            output_dim = tuple((sensor_param[SensorParam.SHAPE] * 1 / down_out).astype(int))
-        else:
-            output_dim = sensor_param[SensorParam.SHAPE]
-
-    ## load mnist dataset
-    use_cuda = torch.cuda.is_available()
-    multi_gpu = False
-    if device is None:
-        if use_cuda:
-            print("CUDA available, using GPU.")
-            device = "cuda"
-            n_gpus = torch.cuda.device_count()
-            if n_gpus > 1 and not single_gpu:
-                multi_gpu = True
-                print(f"-- using {n_gpus} GPUs")
-            else:
-                multi_gpu = False
-
-        else:
-            device = "cpu"
-            print("CUDA not available, using CPU.")
-    else:
-        if device == "cpu":
-            use_cuda = False
-        if use_cuda:
-            n_gpus = torch.cuda.device_count()
-            if n_gpus > 1 and not single_gpu:
-                multi_gpu = True
-                print(f"-- using {n_gpus} GPUs")
+    target_dim = np.array([28, 28])
+    if down_orig:
+        w = int(np.round(np.sqrt(np.prod(target_dim) / down_orig)))
+        target_dim = np.array([w, w])
+    print(f"Target dimension : {target_dim}")
+    print(f"Flattened : {np.prod(target_dim)}")
 
     # check if need to create dataset
+    if random_height is not None:
+        random_height = np.array(random_height) * 1e-2
+        object_height = None
+
     if dataset is None:
         dataset = simulate_propagated_dataset(
             dataset="MNIST",
@@ -261,8 +310,13 @@ def train_slm_logistic_reg(
             single_psf=False,
             output_dir=output_dir,
             n_files=n_files,
+            random_shift=shift,
+            random_height=random_height,
+            rotate=rotate,
+            perspective=perspective,
         )
 
+    # TODO -not needed for hybrid as we keep input non-negative for convolution with PSF
     # -- first determine mean and standard deviation (of training set)
     if mean is None and std is None:
         trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize(0, 1)])
@@ -291,6 +345,12 @@ def train_slm_logistic_reg(
     print("==>>> total testing batch number: {}".format(len(test_loader)))
 
     ## hybrid neural network
+    if down_out:
+        sensor_param = sensor_dict[sensor]
+        sensor_size = sensor_param[SensorParam.SHAPE]
+        output_dim = (sensor_size * 1 / down_out).astype(int)
+    else:
+        output_dim = None
     model = SLMMultiClassLogistic(
         input_shape=input_shape,
         slm_config=slm_dict[slm],
@@ -301,12 +361,17 @@ def train_slm_logistic_reg(
         scene2mask=scene2mask,
         mask2sensor=mask2sensor,
         device_mask_creation=device_mask_creation,
-        output_dim=output_dim,
         sensor_activation=sensor_act_fn,
-        multi_gpu=multi_gpu,
+        multi_gpu=device_ids,
         dropout=dropout,
         noise_type=noise_type,
         snr=snr,
+        target_dim=target_dim,
+        down=down,
+        n_class=10,  # for MNIST
+        hidden=hidden,
+        hidden2=hidden2,
+        output_dim=output_dim,
     )
 
     if use_cuda:
@@ -314,17 +379,38 @@ def train_slm_logistic_reg(
 
     if cont:
         state_dict_fp = str(cont / "state_dict.pth")
-        model.load_state_dict(torch.load(state_dict_fp))
+        state_dict = torch.load(state_dict_fp)
+
+        # --- fix after parameter name change
+        params = []
+        for k, v in state_dict.items():
+            if "conv_bn2" in k:
+                params.append((k.replace("conv_bn2", "bn"), v))
+            else:
+                params.append((k, v))
+        state_dict = OrderedDict(params)
+
+        model.load_state_dict(state_dict)
         model.compute_intensity_psf()
+
+    if fix_slm > 0:
+        model.slm_vals.requires_grad = False
+        model._psf = model._psf.detach()
 
     # set optimizer
     # TODO : set different learning rates: https://pytorch.org/docs/stable/optim.html
     if opti == "sgd":
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
+        optimizer = optim.SGD(
+            # model.parameters(),
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=lr,
+            momentum=momentum,
+        )
     elif opti == "adam":
         # same default params
         optimizer = optim.Adam(
-            model.parameters(),
+            # model.parameters(),
+            filter(lambda p: p.requires_grad, model.parameters()),
             lr=0.001,
             betas=(0.9, 0.999),
             eps=1e-08,
@@ -337,20 +423,37 @@ def train_slm_logistic_reg(
     criterion = nn.CrossEntropyLoss()
 
     # Print model and optimizer state_dict
-    print("\nModel's state_dict:")
-    for param_tensor in model.state_dict():
-        print(param_tensor, "\t", model.state_dict()[param_tensor].size())
+    # print("\nModel's state_dict:")
+    # for param_tensor in model.state_dict():
+    #     print(
+    #         param_tensor,
+    #         "\t",
+    #         model.state_dict()[param_tensor].size(),
+    #         model.state_dict()[param_tensor].requires_grad,
+    #     )
+    print("\nModel parameters:")
+    for name, params in model.named_parameters():
+        print(name, "\t", params.size(), "\t", params.requires_grad)
     print()
     print("Optimizer's state_dict:")
     for var_name in optimizer.state_dict():
         print(var_name, "\t", optimizer.state_dict()[var_name])
 
+    if min_val is None:
+        min_val = 0
+        for (x, target) in train_loader:
+            if x.min() < min_val:
+                min_val = x.min()
+        min_val = float(min_val.item())
+        print("Minimum value : ", min_val)
+
     ## save best model param
-    n_hidden = np.prod(output_dim)
     timestamp = datetime.now().strftime("%d%m%Y_%Hh%M")
-    model_output_dir = f"./{os.path.basename(dataset)}_outdim{int(n_hidden)}_{n_epoch}epoch_seed{seed}_logistic_reg"
+    model_output_dir = f"./{os.path.basename(dataset)}_outdim{model.n_hidden}_{n_epoch}epoch_seed{seed}_{model.name()}"
     if noise_type:
         model_output_dir += f"_{noise_type}{snr}"
+    if model.downsample is not None:
+        model_output_dir += f"_DS{down}"
     model_output_dir += f"_{timestamp}"
 
     model_output_dir = plib.Path(model_output_dir)
@@ -358,12 +461,14 @@ def train_slm_logistic_reg(
     model_file = model_output_dir / "state_dict.pth"
     test_loss_fp = model_output_dir / "test_loss.npy"
     test_acc_fp = model_output_dir / "test_acc.npy"
+    train_acc_fp = model_output_dir / "train_acc.npy"
 
     metadata = {
         "dataset": join(dirname(dirname(abspath(__file__))), dataset),
         "mean": mean,
         "std": std,
         "slm": slm,
+        "down_orig": down_orig,
         "seed": seed,
         "sensor": sensor,
         "sensor_activation": sensor_act,
@@ -376,42 +481,83 @@ def train_slm_logistic_reg(
             "scene2mask": scene2mask,
             "mask2sensor": mask2sensor,
             "device_mask_creation": device_mask_creation,
-            "output_dim": np.array(output_dim).tolist(),
+            "down": down,
+            "target_dim": target_dim.tolist(),
             "multi_gpu": multi_gpu,
             "dropout": dropout,
+            "hidden": hidden,
+            "hidden2": hidden2,
         },
         "batch_size": batch_size,
         "noise_type": noise_type,
         "snr": None if noise_type is None else snr,
+        "min_val": min_val,
+        "random_shift": shift,
     }
     metadata_fp = model_output_dir / "metadata.json"
     with open(metadata_fp, "w") as fp:
         json.dump(metadata, fp)
+
+    print(f"Model saved to : {str(model_output_dir)}")
 
     print("\nStart training...")
     start_time = time.time()
     if cont:
         test_loss = list(np.load(str(cont / "test_loss.npy")))
         test_accuracy = list(np.load(str(cont / "test_acc.npy")))
+        train_accuracy = list(np.load(str(cont / "train_acc.npy")))
         best_test_acc = np.max(test_accuracy)
         best_test_acc_epoch = np.argmax(test_accuracy) + 1
     else:
         test_loss = []
         test_accuracy = []
+        train_accuracy = []
         best_test_acc = 0
         best_test_acc_epoch = 0
     for epoch in range(n_epoch):
+
+        if epoch == fix_slm:
+            print("Unfreezing SLM layer...")
+            model.slm_vals.requires_grad = True
+            # model._psf.requires_grad = True
+            model.compute_intensity_psf()
+
+            # best to overwrite optimizer: https://stackoverflow.com/a/55766749
+            # optimizer.param_groups.append({"params": extra_params})
+            if opti == "sgd":
+                optimizer = optim.SGD(
+                    # model.parameters(),
+                    filter(lambda p: p.requires_grad, model.parameters()),
+                    lr=lr,
+                    momentum=momentum,
+                )
+            elif opti == "adam":
+                # same default params
+                optimizer = optim.Adam(
+                    # model.parameters(),
+                    filter(lambda p: p.requires_grad, model.parameters()),
+                    lr=0.001,
+                    betas=(0.9, 0.999),
+                    eps=1e-08,
+                    weight_decay=0,
+                    amsgrad=False,
+                )
+
         # training
         running_loss = 0.0
+        correct_cnt, total_cnt = 0, 0
         for i, (x, target) in enumerate(train_loader):
 
-            # print(i)
             # mask_old = model.slm_vals.clone()
             # weights_old = model.multiclass_logistic_reg[0].weight.clone()
 
             # get inputs
             if use_cuda:
                 x, target = x.to(device), target.to(device)
+
+            # non-negative
+            # x.clamp_(min=0, max=x.max())
+            x -= min_val
 
             # zero parameters gradients
             optimizer.zero_grad()
@@ -422,13 +568,20 @@ def train_slm_logistic_reg(
             loss.backward()
             optimizer.step()
 
-            # ensure model weights are between [0, 1]
-            with torch.no_grad():
-                model.slm_vals.clamp_(min=0, max=1)
+            # train accuracy
+            _, pred_label = torch.max(out.data, 1)
+            total_cnt += x.data.size()[0]
+            correct_cnt += (pred_label == target.data).sum()
+            running_acc = (correct_cnt * 1.0 / total_cnt).item()
 
-            # SLM values have updated after backward
-            # TODO : move into forward?
-            model.compute_intensity_psf()
+            # ensure model weights are between [0, 1] and quantize
+            if epoch >= fix_slm:
+                with torch.no_grad():
+                    model.slm_vals.clamp_(min=0, max=1)
+
+                # SLM values have updated after backward
+                # TODO : move into forward?
+                model.compute_intensity_psf()
 
             # mask_new = model.slm_vals.clone()
             # weights_new = model.multiclass_logistic_reg[0].weight.clone()
@@ -442,13 +595,24 @@ def train_slm_logistic_reg(
             if (i + 1) % print_epoch == 0:  # print every `print_epoch` mini-batches
                 proc_time = (time.time() - start_time) / 60.0
                 print(
-                    f"[{epoch + 1}, {i + 1:5d}, {proc_time:.2f} min] loss: {running_loss / print_epoch:.3f}"
+                    f"[{epoch + 1}, {i + 1:5d}, {proc_time:.2f} min] loss: {running_loss / print_epoch:.3f}, acc: {running_acc:.3f}"
                 )
                 running_loss = 0.0
 
             # if i % batch_size == (batch_size - 1):  # print every X mini-batches
             #     print(f"[{epoch + 1}, {i + 1:5d}] loss: {running_loss / batch_size:.3f}")
             #     running_loss = 0.0
+
+        # TODO : QUANTIZATION
+        # with torch.no_grad():
+        #     # quantize
+        #     model.slm_vals *= 255
+        #     model.slm_vals = torch.nn.Parameter(model.slm_vals.to(dtype=torch.uint8).to(dtype=torch.float32) / 255)
+        #     model.compute_intensity_psf()
+
+        train_acc = (correct_cnt * 1.0 / total_cnt).item()
+        train_accuracy.append(train_acc)
+        print(f"training accuracy : {train_acc:.3f}")
 
         # testing
         correct_cnt, running_loss = 0, 0
@@ -458,6 +622,10 @@ def train_slm_logistic_reg(
             # get inputs
             if use_cuda:
                 x, target = x.to(device), target.to(device)
+
+            # non-negative
+            # x.clamp_(min=0, max=x.max())
+            x -= min_val
 
             # forward, and compute loss
             out = model(x)
@@ -487,6 +655,8 @@ def train_slm_logistic_reg(
             np.save(f, np.array(test_loss))
         with open(test_acc_fp, "wb") as f:
             np.save(f, np.array(test_accuracy))
+        with open(train_acc_fp, "wb") as f:
+            np.save(f, np.array(train_acc))
 
     proc_time = time.time() - start_time
     print(f"Processing time [m] : {proc_time / 60}")
@@ -507,4 +677,4 @@ def train_slm_logistic_reg(
 
 
 if __name__ == "__main__":
-    train_slm_logistic_reg()
+    train_hybrid()

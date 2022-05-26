@@ -19,6 +19,8 @@ from skimage.util.noise import random_noise
 import itertools
 from scipy import ndimage
 import json
+from torch import nn
+from lenslessclass.util import AddPoissonNoise
 
 
 # https://github.com/pytorch/pytorch/issues/1494#issuecomment-305993854
@@ -49,6 +51,7 @@ class MNISTAugmented(Dataset):
 
         with open(os.path.join(self._subdir, "labels.txt")) as f:
             self._labels = [int(i) for i in f]
+
         assert self._n_files == len(self._labels)
 
         self.transform = transform
@@ -124,10 +127,16 @@ class MNISTPropagated(datasets.MNIST):
         train=True,
         download=True,
         scale=(1, 1),
+        max_val=255,
         dtype=np.float32,
         dtype_out=torch.uint8,  # simulate quantization of sensor
         noise_type=None,
         snr=40,
+        down="resize",
+        random_shift=False,
+        random_height=None,
+        rotate=False,
+        perspective=False,
         **kwargs,
     ):
         """
@@ -135,9 +144,16 @@ class MNISTPropagated(datasets.MNIST):
             Downsample PSF to do smaller convolution.
         crop_psf : int
             To be used for lens PSF! How much to crop around peak of lens to extract the PSF.
+
+        TODO : interesting transformations
+        - Random perspective: https://pytorch.org/vision/main/auto_examples/plot_transforms.html#randomperspective
+        - Random rotation: https://pytorch.org/vision/main/auto_examples/plot_transforms.html#randomperspective
+
+
         """
         self.dtype = dtype
         self.dtype_out = dtype_out
+        self.max_val = max_val
 
         self.input_dim = np.array([28, 28])
         sensor_param = sensor_dict[sensor]
@@ -201,20 +217,69 @@ class MNISTPropagated(datasets.MNIST):
         # -- resize to convolution dimension and scale to desired height at object plane
         magnification = mask2sensor / scene2mask
         self.scene_dim = sensor_size / magnification
-        object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
-        scaling = object_height_pix / self.input_dim[1]
-        object_dim = (np.round(self.input_dim * scaling)).astype(int).tolist()
-        transform_list.append(
-            transforms.RandomResizedCrop(size=object_dim, ratio=(1, 1), scale=scale)
-        )
 
-        # -- pad rest with zeros
-        padding = self.conv_dim[:2] - object_dim
-        left = padding[1] // 2
-        right = padding[1] - left
-        top = padding[0] // 2
-        bottom = padding[0] - top
-        transform_list.append(transforms.Pad(padding=(left, top, right, bottom)))
+        if random_height is not None:
+            # TODO combine with shifting which needs to know padding
+            assert len(random_height) == 2
+            assert random_height[0] < random_height[1]
+
+            def random_scale(image):
+
+                object_height = np.random.uniform(low=random_height[0], high=random_height[1])
+                object_height_pix = int(
+                    np.round(object_height / self.scene_dim[1] * self.conv_dim[1])
+                )
+                scaling = object_height_pix / self.input_dim[1]
+                object_dim = (np.round(self.input_dim * scaling)).astype(int).tolist()
+                image = transforms.Resize(size=object_dim)(image)
+
+                # -- pad rest with zeros
+                padding = self.conv_dim[:2] - object_dim
+                left = padding[1] // 2
+                right = padding[1] - left
+                top = padding[0] // 2
+                bottom = padding[0] - top
+                image = transforms.Pad(padding=(left, top, right, bottom))(image)
+                return image
+
+            transform_list.append(random_scale)
+        else:
+            assert isinstance(object_height, float)
+            object_height_pix = int(np.round(object_height / self.scene_dim[1] * self.conv_dim[1]))
+            scaling = object_height_pix / self.input_dim[1]
+            object_dim = (np.round(self.input_dim * scaling)).astype(int).tolist()
+            transform_list.append(
+                transforms.RandomResizedCrop(size=object_dim, ratio=(1, 1), scale=scale)
+            )
+
+            # -- pad rest with zeros
+            padding = self.conv_dim[:2] - object_dim
+            left = padding[1] // 2
+            right = padding[1] - left
+            top = padding[0] // 2
+            bottom = padding[0] - top
+            transform_list.append(transforms.Pad(padding=(left, top, right, bottom)))
+
+        if rotate:
+            # rotate around center
+            transform_list.append(transforms.RandomRotation(degrees=rotate))
+
+        if perspective:
+            transform_list.append(transforms.RandomPerspective(distortion_scale=perspective, p=1.0))
+
+        # -- random shift
+        if random_shift:
+
+            assert (
+                random_height is None
+            ), "Random height not supported with random shift, need padding info"
+
+            def shift_within_sensor(image):
+                hshift = int(np.random.uniform(low=-left, high=right))
+                vshift = int(np.random.uniform(low=-bottom, high=top))
+                return torch.roll(image, shifts=(vshift, hshift), dims=(1, 2))
+
+            transform_list.append(shift_within_sensor)
 
         if not grayscale:
             transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))
@@ -232,34 +297,43 @@ class MNISTPropagated(datasets.MNIST):
             # -- resize to output dimension
             # more manageable to train on and perhaps don't need so many DOF
             if output_dim:
-                self._transform_post.append(transforms.Resize(size=output_dim))
+                if down == "resize":
+                    self._transform_post.append(transforms.Resize(size=output_dim))
+                elif down == "max" or down == "avg":
+                    hidden = np.prod(output_dim)
 
-            # -- add noise at sensor
-            if noise_type is not None:
-                # TODO : hardcoded for Raspberry Pi HQ sensor
-                bit_depth = 12
-                noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
+                    # determine filter size, stride, and padding: https://androidkt.com/calculate-output-size-convolutional-pooling-layers-cnn/
+                    k = int(np.ceil(np.sqrt(np.prod(self.conv_dim) / hidden)))
+                    p = np.roots(
+                        [4, 2 * np.sum(self.conv_dim), np.prod(self.conv_dim) - k**2 * hidden]
+                    )
+                    p = max(int(np.max(p)), 0) + 1
+                    if down == "max":
+                        pooler = nn.MaxPool2d(kernel_size=k, stride=k, padding=p)
+                    else:
+                        pooler = nn.AvgPool2d(kernel_size=k, stride=k, padding=p)
+                    self._transform_post.append(pooler)
+                else:
+                    raise ValueError("Invalid downsampling approach.")
 
-                self._transform_post.append(AddNoise(snr, noise_type, noise_mean, dtype))
+            if noise_type:
+                if noise_type == "poisson":
+                    transform_list.append(AddPoissonNoise(snr))
+                else:
+                    if sensor == SensorOptions.RPI_HQ.value:
+                        bit_depth = 12
+                        noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
+                    else:
+                        noise_mean = 0
+                    transform_list.append(AddNoise(snr, noise_type, noise_mean, dtype))
 
-                # def add_noise(measurement):
+            # # -- add noise at sensor
+            # if noise_type is not None:
+            #     # TODO : hardcoded for Raspberry Pi HQ sensor
+            #     bit_depth = 12
+            #     noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
 
-                #     measurement_copy = measurement.clone().cpu().detach().numpy()
-
-                #     # measurement is intensity
-                #     sig_var = np.linalg.norm(measurement_copy)
-                #     noise_var = sig_var / (10 ** (snr / 10))
-                #     noisy = random_noise(
-                #         measurement_copy,
-                #         mode=noise_type,
-                #         clip=False,
-                #         mean=noise_mean,
-                #         var=noise_var**2,
-                #     )
-
-                #     return torch.tensor(np.array(noisy).astype(dtype)).to(device)
-
-                # self._transform_post.append(add_noise)
+            #     self._transform_post.append(AddNoise(snr, noise_type, noise_mean, dtype))
 
             self._transform_post = transforms.Compose(self._transform_post)
 
@@ -278,10 +352,10 @@ class MNISTPropagated(datasets.MNIST):
             img = self._transform_post(img)
 
         # cast to uint8 as on sensor
-        if img.max() > 1:
-            # todo: clip instead?
-            img /= img.max()
-        img *= 255
+        # if img.max() > 1:
+        img /= img.max()
+        # cast to uint8 as on sensor and use max range
+        img *= self.max_val
         img = img.to(dtype=self.dtype_out)
 
         return img, res[1]
@@ -530,19 +604,21 @@ class CelebAPropagated(datasets.CelebA):
             )
             transform_list.append(conv_op)
 
+            if noise_type:
+                if noise_type == "poisson":
+                    transform_list.append(AddPoissonNoise(snr))
+                else:
+                    if sensor == SensorOptions.RPI_HQ.value:
+                        bit_depth = 12
+                        noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
+                    else:
+                        noise_mean = 0
+                    transform_list.append(AddNoise(snr, noise_type, noise_mean, dtype))
+
             # -- resize to output dimension
             # more manageable to train on and perhaps don't need so many DOF
             if output_dim:
                 transform_list.append(transforms.Resize(size=output_dim))
-
-            # -- add noise at sensor
-            if noise_type:
-                if sensor == SensorOptions.RPI_HQ.value:
-                    bit_depth = 12
-                    noise_mean = RPI_HQ_CAMERA_BLACK_LEVEL / (2**bit_depth - 1)
-                else:
-                    noise_mean = 0
-                transform_list.append(AddNoise(snr, noise_type, noise_mean, dtype))
 
         transform = transforms.Compose(transform_list)
         super().__init__(root=root, split=split, download=False, transform=transform)
@@ -649,6 +725,11 @@ def simulate_propagated_dataset(
     snr=40,
     batch_size=100,
     n_workers=0,
+    down="resize",
+    random_shift=False,
+    random_height=None,
+    rotate=False,
+    perspective=False,
 ):
     """
     psf : str
@@ -659,40 +740,53 @@ def simulate_propagated_dataset(
     """
 
     sensor_param = sensor_dict[sensor]
+    if object_height is None:
+        object_height = f"{random_height[0]}-{random_height[1]}"  # for creating directory name
 
     if psf is not None:
         psf_bn = os.path.basename(psf).split(".")[0]
-        if output_dim:
+        if down_out:
+            output_dir = os.path.join(
+                output_dir,
+                f"{dataset}_{psf_bn}_down{int(down_out)}_height{object_height}_scene2mask{scene2mask}",
+            )
+        elif output_dim is not None:
             n_hidden = np.prod(output_dim)
             output_dir = os.path.join(
                 output_dir,
                 f"{dataset}_{psf_bn}_outdim{int(n_hidden)}_height{object_height}_scene2mask{scene2mask}",
             )
-        else:
-            assert down_out is not None
-            output_dir = os.path.join(
-                output_dir,
-                f"{dataset}_{psf_bn}_down{int(down_out)}_height{object_height}_scene2mask{scene2mask}",
-            )
+
         if noise_type:
             output_dir += f"_{noise_type}{snr}"
         if crop_psf:
             output_dir += f"_croppsf{crop_psf}"
+        if down_psf > 1:
+            output_dir += f"_downpsf{down_psf}"
+        if down != "resize":
+            output_dir += f"_DS{down}"
         if not grayscale:
             output_dir += "_rgb"
 
         if output_dim is None:
             if down_out:
-                output_dim = tuple((sensor_param[SensorParam.SHAPE] * 1 / down_out).astype(int))
+                output_dim = (sensor_param[SensorParam.SHAPE] * 1 / down_out).astype(int)
             else:
-                output_dim = tuple(sensor_param[SensorParam.SHAPE])
+                output_dim = sensor_param[SensorParam.SHAPE]
     else:
         # no PSF as we learn SLM. Simulate until mask
         output_dir = os.path.join(
             output_dir, f"{dataset}_no_psf_down{int(down_psf)}_height{object_height}"
         )
-        output_dim = tuple((sensor_param[SensorParam.SHAPE] * 1 / down_psf).astype(int))
+        output_dim = (sensor_param[SensorParam.SHAPE] * 1 / down_psf).astype(int)
+    output_dim = np.array(output_dim).tolist()
 
+    if random_shift:
+        output_dir += "_RandomShift"
+    if rotate:
+        output_dir += f"_RandomRotate{rotate}"
+    if perspective:
+        output_dir += f"_RandomPerspective{perspective}"
     if n_files:
         output_dir += f"_{n_files}files"
 
@@ -718,7 +812,12 @@ def simulate_propagated_dataset(
         "single_psf": single_psf,
         "crop_psf": crop_psf,
         "noise_type": noise_type,
-        "snr": snr,
+        "snr": None if noise_type is None else snr,
+        "down": down,
+        "random_shift": random_shift,
+        "rotate": rotate,
+        "perspective": perspective,
+        "random_height": random_height.tolist() if random_height is not None else None,
     }
     if dataset == "MNIST":
         ds_train = MNISTPropagated(**args, train=True)
@@ -742,6 +841,7 @@ def simulate_propagated_dataset(
     train_output = output_dir / train_subdir
     if not os.path.isdir(train_output):
         train_output.mkdir(exist_ok=True)
+
     train_labels = []
     start_time = time.time()
 
@@ -751,27 +851,29 @@ def simulate_propagated_dataset(
     )
 
     if n_files is None:
-        n_files = len(ds_train)
+        n_files_train = len(ds_train)
+    else:
+        n_files_train = n_files
 
-    n_complete_files = len(list(train_output.glob("*.png")))
-    if n_complete_files < n_files:
+    n_png = len(list(train_output.glob("*.png")))
+    if n_png < n_files_train:
+        print(f"TRAIN SET : Augmenting {n_files_train - n_png} files...")
 
-        if os.path.isdir(train_output):
-            print("Completing files that haven't been augmented...")
-
-        n_batch_complete = n_complete_files // batch_size
+        n_batch_complete = n_png // batch_size
         reached_n_files = False
 
-        for batch_idx, (x, target) in enumerate(train_loader, start=n_batch_complete):
+        if n_png:
+            for i in range(n_png):
+                label_fp = train_output / f"label{i}"
+                train_labels.append(torch.load(label_fp))
 
-            if reached_n_files:
-                break
+        for batch_idx, (x, target) in enumerate(train_loader, start=n_batch_complete):
 
             for sample_idx, data in enumerate(x):
 
                 i = batch_idx * batch_size + sample_idx
 
-                if i == n_files:
+                if i == n_files_train:
                     reached_n_files = True
                     break
 
@@ -785,7 +887,7 @@ def simulate_propagated_dataset(
 
                     if img_data.dtype == np.uint8:
                         # save as viewable images
-                        if len(img_data) == 3:
+                        if len(img_data.shape) == 3:
                             # RGB
                             img_data = img_data.transpose(1, 2, 0)
                         im = Image.fromarray(img_data)
@@ -803,7 +905,10 @@ def simulate_propagated_dataset(
 
                 if i % print_progress == (print_progress - 1):
                     proc_time = time.time() - start_time
-                    print(f"{i + 1} / {n_files} examples, {proc_time / 60} minutes")
+                    print(f"{i + 1} / {n_files_train} examples, {proc_time / 60} minutes")
+
+            if reached_n_files:
+                break
 
         with open(train_output / "labels.txt", "w") as f:
             for item in train_labels:
@@ -819,6 +924,7 @@ def simulate_propagated_dataset(
         test_output = output_dir / "test"
         if not os.path.isdir(test_output):
             test_output.mkdir(exist_ok=True)
+
         test_labels = []
         start_time = time.time()
 
@@ -828,27 +934,30 @@ def simulate_propagated_dataset(
         )
 
         if n_files is None:
-            n_files = len(ds_test)
+            n_files_test = len(ds_test)
+        else:
+            n_files_test = n_files
 
         n_complete_files = len(list(test_output.glob("*.png")))
-        if n_complete_files < n_files:
 
-            if os.path.isdir(test_output):
-                print("Completing files that haven't been augmented...")
+        if n_complete_files < n_files_test:
+            print(f"TEST SET : Augmenting {n_files_test - n_complete_files} files...")
 
             n_batch_complete = n_complete_files // batch_size
             reached_n_files = False
 
-            for batch_idx, (x, target) in enumerate(test_loader, start=n_batch_complete):
+            if n_complete_files:
+                for i in range(n_complete_files):
+                    label_fp = test_output / f"label{i}"
+                    test_labels.append(torch.load(label_fp))
 
-                if reached_n_files:
-                    break
+            for batch_idx, (x, target) in enumerate(test_loader, start=n_batch_complete):
 
                 for sample_idx, data in enumerate(x):
 
                     i = batch_idx * batch_size + sample_idx
 
-                    if i == n_files:
+                    if i == n_files_test:
                         reached_n_files = True
                         break
 
@@ -862,7 +971,7 @@ def simulate_propagated_dataset(
 
                         if img_data.dtype == np.uint8:
                             # save as viewable images
-                            if len(img_data) == 3:
+                            if len(img_data.shape) == 3:
                                 # RGB
                                 img_data = img_data.transpose(1, 2, 0)
                             im = Image.fromarray(img_data)
@@ -880,7 +989,10 @@ def simulate_propagated_dataset(
 
                     if i % print_progress == (print_progress - 1):
                         proc_time = time.time() - start_time
-                        print(f"{i + 1} / {len(ds_test)} examples, {proc_time / 60} minutes")
+                        print(f"{i + 1} / {n_files_test} examples, {proc_time / 60} minutes")
+
+                if reached_n_files:
+                    break
 
             with open(test_output / "labels.txt", "w") as f:
                 for item in test_labels:
@@ -888,6 +1000,6 @@ def simulate_propagated_dataset(
 
             proc_time = time.time() - start_time
             print(f"Processing time [m] : {proc_time / 60}")
-            print("Finished test set")
+            print("Finished test set\n")
 
     return str(output_dir)

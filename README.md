@@ -7,8 +7,21 @@ pip install -e .
 conda install -c pytorch torchvision==0.10.1 cudatoolkit=11.1 pytorch
 ```
 
-Have to install `waveprop` as well! Atm a private repo...
+Install `waveprop` from suource.
 
-Procedure (for fixed PSF):
-1. (Optionally) prepare dataset before: `scripts/save_simulated_dataset.py`
-2. Run training (dataset will be created if not available): `scripts/train_logistic_reg.py`
+## Creating simulated PSFs
+
+- MLS: `notebooks/mls_mask.ipynb`
+- Fixed SLM (s): `save_simulated_psf.py`
+
+## Running experiments
+
+The following script can be used to run the experiments of Section 4.1:
+```
+./mnist_vary_dimension.sh
+```
+
+The following script can be used to run the experiments of Section 4.2:
+```
+./mnist_robustness.sh
+```

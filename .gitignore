@@ -1,5 +1,8 @@
 data/*
 models/*
+MNIST*
+CelebA*
+celeba*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
