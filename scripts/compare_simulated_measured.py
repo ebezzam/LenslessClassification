@@ -58,7 +58,7 @@ from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
 @click.option(
     "--crop_fact",
     type=float,
-    default=0.7,
+    default=0.8,
     help="Fraction of sensor that is left uncropped, centered.",
 )
 @click.option("--scene2mask", type=float, default=0.4, help="Scene to SLM/mask distance in meters.")

@@ -25,6 +25,7 @@ from sklearn.model_selection import train_test_split
 from pprint import pprint
 from lenslessclass.util import device_checks
 import pandas as pd
+from lenslessclass.generator import SingleHidden
 
 
 @click.command()
@@ -127,11 +128,6 @@ import pandas as pd
     is_flag=True,
     help="Whether to use single GPU is multiple available. Default will try using all.",
 )
-@click.option(
-    "--cont",
-    type=str,
-    help="Path to training to continue.",
-)
 @click.option("--n_files", type=int, default=None, help="For testing purposes.")
 @click.option(
     "--output_dim",
@@ -140,46 +136,22 @@ import pandas as pd
     type=int,
     help="Output dimension (height, width).",
 )
-@click.option(
-    "--hidden", type=int, default=None, help="If defined, add a hidden layer with this many units."
-)
-@click.option(
-    "--hidden2",
-    type=int,
-    default=None,
-    help="If defined, add a second hidden layer with this many units.",
-)
+@click.option("--hidden", type=int, default=10000, help="Hidden layer with this many units.")
 @click.option("--device", type=str, help="Main device for training.")
 @click.option(
-    "--cnn",
-    default=None,
-    type=int,
-    help="Use CNN model as classifier. Argument denotes number of kernels.",
+    "--mean",
+    type=float,
+    help="Mean of original dataset to normalize, if not provided it will be computed.",
 )
 @click.option(
-    "--cnn_lite",
-    default=None,
-    type=int,
-    help="Use CNNLite model as classifier. Argument denotes number of kernels.",
+    "--std",
+    type=float,
+    help="Standard deviation of original dataset to normalize, if not provided it will be computed.",
 )
-@click.option(
-    "--pool",
-    default=2,
-    type=int,
-    help="Pooling for CNN models.",
-)
-@click.option(
-    "--kernel_size",
-    default=3,
-    type=int,
-    help="Kernel size for CNN models.",
-)
-def train_fixed_encoder(
-    down_orig,
+def train_decoder(
+    root,
     attr,
     test_size,
-    device,
-    single_gpu,
     dataset,
     seed,
     lr,
@@ -189,6 +161,7 @@ def train_fixed_encoder(
     opti,
     psf,
     output_dir,
+    down_out,
     scene2mask,
     mask2sensor,
     down_psf,
@@ -203,48 +176,31 @@ def train_fixed_encoder(
     noise_type,
     snr,
     hidden,
-    cont,
-    root,
-    down_out,
+    device,
+    down_orig,
+    single_gpu,
     use_max_range,
-    cnn,
-    cnn_lite,
-    pool,
-    kernel_size,
-    hidden2,
+    mean,
+    std,
 ):
-    if cont:
-        cont = plib.Path(cont)
-        print(f"\nCONTINUTING TRAINING FOR {n_epoch} EPOCHS")
-        f = open(str(cont / "metadata.json"))
-        metadata = json.load(f)
-        pprint(metadata)
+    if n_files == 0:
+        n_files = None
 
-        dataset = metadata["dataset"]
-        mean = metadata["mean"]
-        std = metadata["std"]
-        seed = metadata["seed"]
-        down_orig = metadata["down_orig"]
-        multi_gpu = metadata["model_param"]["multi_gpu"]
-        single_gpu = metadata["single_gpu"]
-        batch_size = metadata["batch_size"]
-        attr = metadata["attr"]
-
-    assert attr is not None
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
+
+    if crop_psf:
+        down_psf = 1
 
     device, use_cuda, multi_gpu, device_ids = device_checks(device=device, single_gpu=single_gpu)
 
     ## LOAD DATASET
 
     # -- load original to have same split
-    mean = 0.5
-    std = 1.0
     trans_list = [
         transforms.ToTensor(),
-        transforms.Normalize((mean,), (std,)),
+        transforms.Normalize((0.5,), (1,)),
         transforms.Grayscale(num_output_channels=1),
     ]
 
@@ -286,78 +242,68 @@ def train_fixed_encoder(
     df_attr = pd.DataFrame(ds.attr[test_indices, label_idx])
     print(df_attr.value_counts() / len(df_attr))
 
-    if dataset is None and psf is None:
+    # -- simulate
+    if "lens" in psf:
+        assert crop_psf is not None
 
-        # use original dataset
-        print("\nNo dataset nor PSF provided, using original CelebA dataset!\n")
-        noise_type = None
+    sensor_param = sensor_dict[sensor]
+    sensor_size = sensor_param[SensorParam.SHAPE]
 
-        train_set = Subset(ds, train_indices)
-        test_set = Subset(ds, test_indices)
-        output_dim = np.array(list(train_set[0][0].shape))
+    if output_dim is None:
+        if down_out:
+            output_dim = tuple((sensor_size / down_out).astype(int))
+        elif down_orig:
+            # determine output dim so that sensor measurement is
+            # scaled so that aspect ratio is preserved
+            n_hidden = np.prod(target_dim)
+            w = int(np.sqrt(n_hidden * sensor_size[0] / sensor_size[1]))
+            h = int(sensor_size[1] / sensor_size[0] * w)
+            output_dim = (w, h)
 
-    if psf:
+    print(f"Output dimension : {output_dim}")
+    print(f"Downsampling factor : {sensor_size[1] / output_dim[1]}")
 
-        if "lens" in psf:
-            assert crop_psf is not None
+    dataset = simulate_propagated_dataset(
+        dataset="celeba",
+        psf=psf,
+        sensor=sensor,
+        output_dir=output_dir,
+        down_psf=down_psf,
+        output_dim=output_dim,
+        scene2mask=scene2mask,
+        mask2sensor=mask2sensor,
+        object_height=object_height,
+        crop_output=crop_output,
+        grayscale=not rgb,
+        single_psf=single_psf,
+        n_files=n_files,
+        crop_psf=crop_psf,
+        noise_type=noise_type,
+        snr=snr,
+        batch_size=batch_size,
+        device_conv=device,
+        use_max_range=use_max_range,
+    )
 
-        sensor_param = sensor_dict[sensor]
-        sensor_size = sensor_param[SensorParam.SHAPE]
-
-        if output_dim is None:
-            if down_out:
-                output_dim = tuple((sensor_size / down_out).astype(int))
-            elif down_orig:
-                # determine output dim so that sensor measurement is
-                # scaled so that aspect ratio is preserved
-                n_hidden = np.prod(target_dim)
-                w = int(np.sqrt(n_hidden * sensor_size[0] / sensor_size[1]))
-                h = int(sensor_size[1] / sensor_size[0] * w)
-                output_dim = (w, h)
-
-        print(f"Output dimension : {output_dim}")
-        print(f"Downsampling factor : {sensor_size[1] / output_dim[1]}")
-
-        dataset = simulate_propagated_dataset(
-            dataset="celeba",
-            psf=psf,
-            sensor=sensor,
-            output_dir=output_dir,
-            down_psf=down_psf,
-            output_dim=output_dim,
-            scene2mask=scene2mask,
-            mask2sensor=mask2sensor,
-            object_height=object_height,
-            crop_output=crop_output,
-            grayscale=not rgb,
-            single_psf=single_psf,
-            n_files=n_files,
-            crop_psf=crop_psf,
-            noise_type=noise_type,
-            snr=snr,
-            batch_size=batch_size,
-            device_conv=device,
-            # n_workers=0,
-            use_max_range=use_max_range,
-        )
-        print()
-
-    if dataset:
-
-        # -- determine mean and standard deviation (of training set)
+    # -- first determine mean and standard deviation (of training set)
+    if mean is None and std is None:
         trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize(0, 1)])
+        print("\nComputing stats...")
+
         all_data = CelebAAugmented(path=dataset, transform=trans)
         train_set = Subset(all_data, train_indices)
         mean, std = get_dataset_stats(train_set)
         print("Dataset mean : ", mean)
         print("Dataset standard deviation : ", std)
 
-        # -- normalize according to training set stats
-        trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
-        all_data = CelebAAugmented(path=dataset, transform=trans)
-        train_set = Subset(all_data, train_indices)
-        test_set = Subset(all_data, test_indices)
-        output_dim = np.array(list(train_set[0][0].shape))
+        del all_data
+
+    # -- normalize according to training set stats
+    trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
+    all_data = CelebAAugmented(path=dataset, transform=trans, return_original=root)
+    train_set = Subset(all_data, train_indices)
+    test_set = Subset(all_data, test_indices)
+    input_shape = np.array(list(train_set[0][0].squeeze().shape))
 
     train_loader = torch.utils.data.DataLoader(
         dataset=train_set, batch_size=batch_size, shuffle=True
@@ -371,66 +317,29 @@ def train_fixed_encoder(
     print("==>>> total training batch number: {}".format(len(train_loader)))
     print("==>>> total testing batch number: {}".format(len(test_loader)))
 
-    ## training
-    if cnn_lite:
-        model = CNNLite(
-            input_shape=output_dim[1:],
-            n_kern=cnn_lite,
-            kernel_size=kernel_size,
-            n_class=1,
-            hidden=hidden,
-            pool=pool,
-        )
-    elif hidden2:
-        assert hidden is not None
-        model = TwoHidden(
-            input_shape=output_dim, hidden_dim=hidden, hidden_dim_2=hidden2, n_class=1
-        )
-    elif hidden:
-        model = SingleHidden(input_shape=output_dim, hidden_dim=hidden, n_class=1)
-    elif cnn:
-        model = CNN(
-            input_shape=output_dim[1:], n_kern=cnn, n_class=1, pool=pool, kernel_size=kernel_size
-        )
-    else:
-        # model = BinaryLogistic(input_shape=output_dim, multi_gpu=multi_gpu)
-        model = BinaryLogistic(input_shape=output_dim)
+    # load model
+    model = SingleHidden(input_shape=output_dim, hidden_dim=hidden, n_output=np.prod(target_dim))
     model_name = model.name()
-
-    # - model to GPU
     if multi_gpu:
         model = nn.DataParallel(model, device_ids=device_ids)
-
     if use_cuda:
         model = model.to(device)
 
-    if cont:
-        state_dict_fp = str(cont / "state_dict.pth")
-        model.load_state_dict(torch.load(state_dict_fp))
-
     # set optimizer
-    # TODO : set different learning rates: https://pytorch.org/docs/stable/optim.html
-    if opti == "sgd":
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
-    elif opti == "adam":
-        # same default params
-        optimizer = optim.Adam(
-            model.parameters(),
-            lr=0.001,
-            betas=(0.9, 0.999),
-            eps=1e-08,
-            weight_decay=0,
-            amsgrad=False,
-        )
-    else:
-        raise ValueError("Invalid optimization approach.")
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=0.001,
+        betas=(0.9, 0.999),
+        eps=1e-08,
+        weight_decay=0,
+        amsgrad=False,
+    )
 
-    criterion = nn.BCELoss()
+    criterion = nn.MSELoss()
 
-    # Print model and optimizer state_dict
-    print("\nModel's state_dict:")
-    for param_tensor in model.state_dict():
-        print(param_tensor, "\t", model.state_dict()[param_tensor].size())
+    print("\nModel parameters:")
+    for name, params in model.named_parameters():
+        print(name, "\t", params.size(), "\t", params.requires_grad)
     print()
     print("Optimizer's state_dict:")
     for var_name in optimizer.state_dict():
@@ -438,10 +347,9 @@ def train_fixed_encoder(
 
     ## save best model param
     timestamp = datetime.now().strftime("%d%m%Y_%Hh%M")
-    if dataset is None:
-        model_output_dir = f"./CelebA_original_{attr}_downorig{down_orig}_{n_epoch}epoch_seed{seed}_{model_name}_{timestamp}"
-    else:
-        model_output_dir = f"./{os.path.basename(dataset)}_{attr}_{n_epoch}epoch_seed{seed}_{model_name}_{timestamp}"
+    model_output_dir = (
+        f"./{os.path.basename(dataset)}_{n_epoch}epoch_seed{seed}_{model_name}_{timestamp}"
+    )
     model_output_dir = plib.Path(model_output_dir)
     model_output_dir.mkdir(exist_ok=True)
     model_file = model_output_dir / "state_dict.pth"
@@ -450,134 +358,88 @@ def train_fixed_encoder(
         "dataset": join(dirname(dirname(abspath(__file__))), dataset)
         if dataset is not None
         else None,
-        "down_out": down_out,
-        "down_orig": down_orig,
-        "attr": attr,
         "seed": seed,
         "mean": mean,
         "std": std,
         "timestamp (DDMMYYYY_HhM)": timestamp,
         "model": model_name,
-        "model_param": {"input_shape": output_dim.tolist(), "multi_gpu": multi_gpu},
         "batch_size": batch_size,
         "hidden_dim": hidden,
-        "hidden_dim2": hidden2,
         "noise_type": noise_type,
         "snr": None if noise_type is None else snr,
-        "single_gpu": single_gpu,
-        "crop_psf": crop_psf,
-        "output_dim": output_dim.tolist(),
-        "device_ids": device_ids,
-        "pool": pool,
-        "kernel_size": kernel_size,
     }
     metadata_fp = model_output_dir / "metadata.json"
     with open(metadata_fp, "w") as fp:
         json.dump(metadata, fp)
 
     test_loss_fp = model_output_dir / "test_loss.npy"
-    test_acc_fp = model_output_dir / "test_acc.npy"
-    train_acc_fp = model_output_dir / "train_acc.npy"
+    train_loss_fp = model_output_dir / "train_loss.npy"
 
     print(f"Model saved to : {str(model_output_dir)}")
 
     print("Start training...")
     start_time = time.time()
-    if cont:
-        test_loss = list(np.load(str(cont / "test_loss.npy")))
-        test_accuracy = list(np.load(str(cont / "test_acc.npy")))
-        train_accuracy = list(np.load(str(cont / "train_acc.npy")))
-        best_test_acc = np.max(test_accuracy)
-        best_test_acc_epoch = np.argmax(test_accuracy) + 1
-    else:
-        test_loss = []
-        test_accuracy = []
-        train_accuracy = []
-        best_test_acc = 0
-        best_test_acc_epoch = 0
+    test_loss = []
+    train_loss = []
+    best_test_loss = np.inf
+    best_test_loss_epoch = 0
     for epoch in range(n_epoch):
+
         # training
         running_loss = 0.0
-        correct_cnt, total_cnt = 0, 0
-        for i, (x, target) in enumerate(train_loader):
+
+        for i, (x, target, x_orig) in enumerate(train_loader):
 
             # get inputs
             if use_cuda:
-                x = x.to(device)
-            target = target[:, label_idx]
-            target = target.unsqueeze(1)
-            target = target.to(x)
+                x, target, x_orig = x.to(device), target.to(device), x_orig.to(device)
+            x_orig = x_orig.view(-1, np.prod(x_orig.size()[1:]))
 
             # zero parameters gradients
             optimizer.zero_grad()
 
             # forward, backward, optimize
             out = model(x)
-            loss = criterion(out, target)
+            loss = criterion(out, x_orig)
             loss.backward()
             optimizer.step()
-
-            # train accuracy
-            pred_label = out.round()
-            correct_cnt += (pred_label == target).sum()
-            total_cnt += x.data.size()[0]
 
             # print statistics
             running_loss += loss.item() / batch_size
             if i % batch_size == (batch_size - 1):  # print every X mini-batches
-                proc_time = (time.time() - start_time) / 60.0
-                print(f"[{epoch + 1}, {i + 1:5d}, {proc_time:.2f} min] loss: {running_loss:.3f}")
-                running_loss = 0.0
+                print(f"[{epoch + 1}, {i + 1:5d}] loss: {running_loss:.3f}")
 
-        train_acc = (correct_cnt * 1.0 / total_cnt).item()
-        train_accuracy.append(train_acc)
-        print(f"training accuracy : {train_acc:.3f}")
+        train_loss.append(running_loss)
 
         # testing
-        correct_cnt, running_loss = 0, 0
-        total_cnt = 0
-        for i, (x, target) in enumerate(test_loader):
+        running_loss = 0.0
+        for i, (x, target, x_orig) in enumerate(test_loader):
 
             # get inputs
             if use_cuda:
-                x = x.to(device)
-            target = target[:, label_idx]
-            target = target.unsqueeze(1)
-            target = target.to(x)
+                x, target, x_orig = x.to(device), target.to(device), x_orig.to(device)
+            x_orig = x_orig.view(-1, np.prod(x_orig.size()[1:]))
 
             # forward, and compute loss
             out = model(x)
-            loss = criterion(out, target)
+            loss = criterion(out, x_orig)
 
-            # compute accuracy
-            pred_label = out.round()
-            correct_cnt += (pred_label == target).sum()
-            total_cnt += x.data.size()[0]
             running_loss += loss.item() / batch_size
-        proc_time = (time.time() - start_time) / 60.0
-        _loss = running_loss
-        _acc = (correct_cnt * 1.0 / total_cnt).item()
-        print(
-            "==>>> epoch: {}, {:.2f} min, test loss: {:.6f}, acc: {:.3f}".format(
-                epoch + 1, proc_time, _loss, _acc
-            )
-        )
-        test_loss.append(_loss)
-        test_accuracy.append(_acc)
 
-        if _acc > best_test_acc:
+        print("==>>> epoch: {}, test loss: {:.6f}".format(epoch + 1, running_loss))
+        test_loss.append(running_loss)
+
+        if running_loss < best_test_loss:
             # save model param
-            best_test_acc = _acc
-            best_test_acc_epoch = epoch + 1
+            best_test_loss = running_loss
+            best_test_loss_epoch = epoch + 1
             torch.save(model.state_dict(), str(model_file))
 
         # save losses
         with open(test_loss_fp, "wb") as f:
             np.save(f, np.array(test_loss))
-        with open(test_acc_fp, "wb") as f:
-            np.save(f, np.array(test_accuracy))
-        with open(train_acc_fp, "wb") as f:
-            np.save(f, np.array(train_accuracy))
+        with open(train_loss_fp, "wb") as f:
+            np.save(f, np.array(train_loss))
 
     proc_time = time.time() - start_time
     print(f"Processing time [m] : {proc_time / 60}")
@@ -586,8 +448,8 @@ def train_fixed_encoder(
     ## save model metadata
     metadata.update(
         {
-            "best_test_acc": best_test_acc,
-            "best_test_acc_epoch": best_test_acc_epoch,
+            "best_test_loss": best_test_loss,
+            "best_test_loss_epoch": best_test_loss_epoch,
         }
     )
     metadata_fp = model_output_dir / "metadata.json"
@@ -598,4 +460,4 @@ def train_fixed_encoder(
 
 
 if __name__ == "__main__":
-    train_fixed_encoder()
+    train_decoder()

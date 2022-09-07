@@ -41,7 +41,7 @@ class MNISTAugmented(Dataset):
     For loading an augmented dataset (simulated or measured).
     """
 
-    def __init__(self, path, train=True, transform=None, dtype=torch.float32):
+    def __init__(self, path, train=True, transform=None, dtype=torch.float32, return_original=None):
         self._path = path
         if train:
             self._subdir = os.path.join(path, "train")
@@ -56,6 +56,21 @@ class MNISTAugmented(Dataset):
 
         self.transform = transform
         self.dtype = dtype
+        self.return_original = return_original
+        # if return_original:
+        #     if train:
+        #         self._subdir_orig = os.path.join(path, "train_orig")
+        #     else:
+        #         self._subdir_orig = os.path.join(path, "test_orig")
+        if return_original:
+
+            transform_list = [transforms.ToTensor()]
+            self.original = datasets.MNIST(
+                root=return_original,
+                train=train,
+                download=False,
+                transform=transforms.Compose(transform_list),
+            )
 
         # get output shape
         img = Image.open(glob.glob(os.path.join(self._subdir, "img*"))[0])
@@ -102,7 +117,15 @@ class MNISTAugmented(Dataset):
         if self.transform:
             img = self.transform(img)
 
-        return img, self._labels[index]
+        if self.return_original:
+            img_orig = self.original[index][0]
+            return img, self._labels[index], img_orig
+        # if self.return_original:
+        #     img_path = os.path.join(self._subdir_orig, f"img{index}.png")
+        #     img_orig = transforms.ToTensor()(Image.open(img_path))
+        #     return img, self._labels[index], img_orig
+        else:
+            return img, self._labels[index]
 
     def __len__(self):
         return self._n_files
@@ -128,6 +151,7 @@ class MNISTPropagated(datasets.MNIST):
         download=True,
         scale=(1, 1),
         max_val=255,
+        use_max_range=True,
         dtype=np.float32,
         dtype_out=torch.uint8,  # simulate quantization of sensor
         noise_type=None,
@@ -137,6 +161,7 @@ class MNISTPropagated(datasets.MNIST):
         random_height=None,
         rotate=False,
         perspective=False,
+        return_original=True,
         **kwargs,
     ):
         """
@@ -144,11 +169,14 @@ class MNISTPropagated(datasets.MNIST):
             Downsample PSF to do smaller convolution.
         crop_psf : int
             To be used for lens PSF! How much to crop around peak of lens to extract the PSF.
-
+        use_max_range : bool
+            Whether to maximym bit depth, or leave it to arbitrary maximum based on simulation.
         """
         self.dtype = dtype
         self.dtype_out = dtype_out
         self.max_val = max_val
+        self.use_max_range = use_max_range
+        self.return_original = return_original
 
         self.input_dim = np.array([28, 28])
         sensor_param = sensor_dict[sensor]
@@ -326,10 +354,17 @@ class MNISTPropagated(datasets.MNIST):
 
         self.device = device
         super().__init__(root=root, train=train, download=download, transform=transform)
+        if return_original:
+            self.original = datasets.MNIST(
+                root=root,
+                train=train,
+                download=download,
+                transform=transforms.Compose([np.array]),
+                # transform=transforms.Compose([transforms.ToTensor()]),
+            )
 
     def __getitem__(self, index):
 
-        res = super().__getitem__(index)
         if self.device:
             img = res[0].to(device=self.device)
         else:
@@ -339,13 +374,16 @@ class MNISTPropagated(datasets.MNIST):
             img = self._transform_post(img)
 
         # cast to uint8 as on sensor
-        # if img.max() > 1:
-        img /= img.max()
-        # cast to uint8 as on sensor and use max range
+        if self.use_max_range or img.max() > 1:
+            img /= img.max()
         img *= self.max_val
         img = img.to(dtype=self.dtype_out)
 
-        return img, res[1]
+        if self.return_original:
+            res_orig = self.original[index][0]
+            return img, res[1], res_orig
+        else:
+            return img, res[1]
 
 
 """"
@@ -401,7 +439,9 @@ class CelebAAugmented(Dataset):
     For loading an augmented dataset (simulated or measured).
     """
 
-    def __init__(self, path, transform=None, dtype=torch.float32):
+    def __init__(
+        self, path, transform=None, dtype=torch.float32, return_original=None, grayscale=True
+    ):
         self._path = path
         self._subdir = os.path.join(path, "all")
         self._n_files = len(glob.glob(os.path.join(self._subdir, "img*.png")))
@@ -417,6 +457,17 @@ class CelebAAugmented(Dataset):
 
         self.transform = transform
         self.dtype = dtype
+        self.return_original = return_original
+        if return_original:
+            transform_list = [transforms.ToTensor()]
+            if grayscale:
+                transform_list.append(transforms.Grayscale(num_output_channels=1))
+            self.original = datasets.CelebA(
+                root=return_original,
+                split="all",
+                download=False,
+                transform=transforms.Compose(transform_list),
+            )
 
         # get output shape
         img = Image.open(glob.glob(os.path.join(self._subdir, "img*"))[0])
@@ -431,7 +482,11 @@ class CelebAAugmented(Dataset):
         if self.transform:
             img = self.transform(img)
 
-        return img, self._labels[index]
+        if self.return_original:
+            img_orig = self.original[index][0]
+            return img, self._labels[index], img_orig
+        else:
+            return img, self._labels[index]
 
     def __len__(self):
         return self._n_files
@@ -489,6 +544,8 @@ class CelebAPropagated(datasets.CelebA):
         dtype_out=torch.uint8,  # simulate quantization of sensor
         noise_type=None,
         snr=40,
+        use_max_range=True,
+        return_original=False,
         **kwargs,
     ):
         """
@@ -505,6 +562,8 @@ class CelebAPropagated(datasets.CelebA):
         """
         self.dtype = dtype
         self.dtype_out = dtype_out
+        self.use_max_range = use_max_range
+        self.return_original = return_original
 
         self.input_dim = np.array([218, 178])
         sensor_param = sensor_dict[sensor]
@@ -610,6 +669,16 @@ class CelebAPropagated(datasets.CelebA):
         transform = transforms.Compose(transform_list)
         super().__init__(root=root, split=split, download=False, transform=transform)
 
+        if return_original:
+            print("TODO : REMOVE")
+            self.original = datasets.CelebA(
+                root=root,
+                split=split,
+                download=False,
+                transform=transforms.Compose([np.array]),
+                # transform=transforms.Compose([transforms.ToTensor()]),
+            )
+
         # index extract label
         self.label = attribute
         if attribute is not None:
@@ -621,7 +690,7 @@ class CelebAPropagated(datasets.CelebA):
         img = res[0]
 
         # cast to uint8 as on sensor
-        if img.max() > 1:
+        if self.use_max_range or img.max() > 1:
             img /= img.max()
         img *= 255
         img = img.to(dtype=self.dtype_out)
@@ -632,7 +701,11 @@ class CelebAPropagated(datasets.CelebA):
         else:
             label = res[1]
 
-        return img, label
+        if self.return_original:
+            res_orig = self.original[index][0]
+            return img, label, res_orig
+        else:
+            return img, label
 
 
 def get_object_height_pix(object_height, mask2sensor, scene2mask, sensor_dim, target_dim):
@@ -717,6 +790,8 @@ def simulate_propagated_dataset(
     random_height=None,
     rotate=False,
     perspective=False,
+    use_max_range=True,
+    return_original=False,
 ):
     """
     psf : str
@@ -768,6 +843,8 @@ def simulate_propagated_dataset(
         output_dim = (sensor_param[SensorParam.SHAPE] * 1 / down_psf).astype(int)
     output_dim = np.array(output_dim).tolist()
 
+    if use_max_range:
+        output_dir += "_NORM"
     if random_shift:
         output_dir += "_RandomShift"
     if rotate:
@@ -805,6 +882,8 @@ def simulate_propagated_dataset(
         "rotate": rotate,
         "perspective": perspective,
         "random_height": random_height.tolist() if random_height is not None else None,
+        "use_max_range": use_max_range,
+        "return_original": return_original,
     }
     if dataset == "MNIST":
         ds_train = MNISTPropagated(**args, train=True)
@@ -828,6 +907,10 @@ def simulate_propagated_dataset(
     train_output = output_dir / train_subdir
     if not os.path.isdir(train_output):
         train_output.mkdir(exist_ok=True)
+    if return_original:
+        train_orig = output_dir / (train_subdir + "_orig")
+        if not os.path.isdir(train_orig):
+            train_orig.mkdir(exist_ok=True)
 
     train_labels = []
     start_time = time.time()
@@ -843,6 +926,9 @@ def simulate_propagated_dataset(
         n_files_train = n_files
 
     n_png = len(list(train_output.glob("*.png")))
+    if return_original:
+        n_orig = len(list(train_orig.glob("*.png")))
+        n_png = min(n_png, n_orig)
     if n_png < n_files_train:
         print(f"TRAIN SET : Augmenting {n_files_train - n_png} files...")
 
@@ -854,7 +940,12 @@ def simulate_propagated_dataset(
                 label_fp = train_output / f"label{i}"
                 train_labels.append(torch.load(label_fp))
 
-        for batch_idx, (x, target) in enumerate(train_loader, start=n_batch_complete):
+        for batch_idx, batch in enumerate(train_loader, start=n_batch_complete):
+
+            if return_original:
+                x, target, orig = batch
+            else:
+                x, target = batch
 
             for sample_idx, data in enumerate(x):
 
@@ -871,6 +962,12 @@ def simulate_propagated_dataset(
                     train_labels.append(torch.load(label_fp))
                 else:
                     img_data = data.cpu().numpy().squeeze()
+
+                    if return_original:
+                        orig_fp = train_orig / f"img{i}.png"
+                        orig_data = orig[sample_idx].numpy().squeeze()
+                        im = Image.fromarray(orig_data)
+                        im.save(orig_fp)
 
                     if img_data.dtype == np.uint8:
                         # save as viewable images
@@ -911,6 +1008,10 @@ def simulate_propagated_dataset(
         test_output = output_dir / "test"
         if not os.path.isdir(test_output):
             test_output.mkdir(exist_ok=True)
+        if return_original:
+            test_orig = output_dir / "test_orig"
+            if not os.path.isdir(test_orig):
+                test_orig.mkdir(exist_ok=True)
 
         test_labels = []
         start_time = time.time()
@@ -938,7 +1039,12 @@ def simulate_propagated_dataset(
                     label_fp = test_output / f"label{i}"
                     test_labels.append(torch.load(label_fp))
 
-            for batch_idx, (x, target) in enumerate(test_loader, start=n_batch_complete):
+            for batch_idx, batch in enumerate(test_loader, start=n_batch_complete):
+
+                if return_original:
+                    x, target, orig = batch
+                else:
+                    x, target = batch
 
                 for sample_idx, data in enumerate(x):
 
@@ -954,6 +1060,13 @@ def simulate_propagated_dataset(
                     if os.path.isfile(output_fp) and os.path.isfile(label_fp):
                         test_labels.append(torch.load(label_fp))
                     else:
+
+                        if return_original:
+                            orig_fp = test_orig / f"img{i}.png"
+                            orig_data = orig[sample_idx].numpy().squeeze()
+                            im = Image.fromarray(orig_data)
+                            im.save(orig_fp)
+
                         img_data = data.cpu().numpy().squeeze()
 
                         if img_data.dtype == np.uint8:

@@ -1,4 +1,4 @@
-from lenslessclass.models import MultiClassLogistic, SingleHidden, DeepBig, CNN, CNNLite
+from lenslessclass.generator import SingleHidden
 from lenslessclass.datasets import simulate_propagated_dataset
 import torch
 import torch.nn as nn
@@ -22,6 +22,12 @@ from pprint import pprint
 
 
 @click.command()
+@click.option(
+    "--root",
+    type=str,
+    default="./data",
+    help="Parent directory of MNIST dataset.",
+)
 @click.option(
     "--dataset",
     type=str,
@@ -91,9 +97,7 @@ from pprint import pprint
 @click.option("--snr", default=40, type=float, help="SNR to determine noise to add.")
 @click.option("--sensor", type=str, help="Which sensor to use.", default=SensorOptions.RPI_HQ.value)
 @click.option("--n_files", type=int, default=None)
-@click.option(
-    "--hidden", type=int, default=None, help="If defined, add a hidden layer with this many units."
-)
+@click.option("--hidden", type=int, default=300, help="Hidden layer with this many units.")
 @click.option("--device", type=str, help="Main device for training.")
 @click.option(
     "--down_orig",
@@ -191,7 +195,8 @@ from pprint import pprint
     type=int,
     help="Kernel size for CNN models.",
 )
-def train_fixed_encoder(
+def train_decoder(
+    root,
     dataset,
     seed,
     lr,
@@ -272,16 +277,9 @@ def train_fixed_encoder(
     ## load mnist dataset
     if dataset is None and psf is None:
 
-        # w = int(np.sqrt(784 / down_fact * 3040 / 4056))
-        # h = int(4056 / 3040 * w)
-        # output_dim_mnist = (w, h)
-        # print(output_dim_mnist)
-        # print(w * h)
-
         # use original dataset
         print("\nNo dataset nor PSF provided, using original MNIST dataset!\n")
 
-        root = "./data"
         if not os.path.exists(root):
             os.mkdir(root)
         mean = 0.5
@@ -306,15 +304,16 @@ def train_fixed_encoder(
 
         sensor_param = sensor_dict[sensor]
         sensor_size = sensor_param[SensorParam.SHAPE]
-        if down_out:
-            output_dim = (sensor_size * 1 / down_out).astype(int)
-        elif down_orig:
-            # determine output dim so that sensor measurement is
-            # scaled so that aspect ratio is preserved
-            n_hidden = np.prod(target_dim)
-            w = int(np.sqrt(n_hidden * sensor_size[0] / sensor_size[1]))
-            h = int(sensor_size[1] / sensor_size[0] * w)
-            output_dim = (w, h)
+        if output_dim is None:
+            if down_out:
+                output_dim = (sensor_size * 1 / down_out).astype(int)
+            elif down_orig:
+                # determine output dim so that sensor measurement is
+                # scaled so that aspect ratio is preserved
+                n_hidden = np.prod(target_dim)
+                w = int(np.sqrt(n_hidden * sensor_size[0] / sensor_size[1]))
+                h = int(sensor_size[1] / sensor_size[0] * w)
+                output_dim = (w, h)
 
         print(f"Output dimension : {output_dim}")
         print(f"Downsampling factor : {sensor_size[1] / output_dim[1]}")
@@ -362,8 +361,8 @@ def train_fixed_encoder(
 
         # -- normalize according to training set stats
         trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
-        train_set = MNISTAugmented(path=dataset, train=True, transform=trans)
-        test_set = MNISTAugmented(path=dataset, train=False, transform=trans)
+        train_set = MNISTAugmented(path=dataset, train=True, transform=trans, return_original=root)
+        test_set = MNISTAugmented(path=dataset, train=False, transform=trans, return_original=root)
         output_dim = train_set.output_dim
 
     train_loader = torch.utils.data.DataLoader(
@@ -376,64 +375,25 @@ def train_fixed_encoder(
     print("==>>> total training batch number: {}".format(len(train_loader)))
     print("==>>> total testing batch number: {}".format(len(test_loader)))
 
-    ## training
-    if deepbig:
-        model = DeepBig(input_shape=output_dim, n_class=10, dropout=dropout)
-        model_name = model.name()
-        if multi_gpu:
-            model = nn.DataParallel(model, device_ids=device_ids)
-    elif cnn_lite:
-        model = CNNLite(
-            input_shape=output_dim,
-            n_kern=cnn_lite,
-            kernel_size=kernel_size,
-            n_class=10,
-            hidden=hidden,
-            pool=pool,
-        )
-        model_name = model.name()
-        if multi_gpu:
-            model = nn.DataParallel(model, device_ids=device_ids)
-    elif hidden:
-        model = SingleHidden(input_shape=output_dim, hidden_dim=hidden, n_class=10)
-        model_name = model.name()
-        if multi_gpu:
-            model = nn.DataParallel(model, device_ids=device_ids)
-    elif cnn:
-        model = CNN(
-            input_shape=output_dim, n_kern=cnn, n_class=10, pool=pool, kernel_size=kernel_size
-        )
-        model_name = model.name()
-        if multi_gpu:
-            model = nn.DataParallel(model, device_ids=device_ids)
-    else:
-        model = MultiClassLogistic(input_shape=output_dim, multi_gpu=device_ids)
-        model_name = model.name()
+    # load model
+    model = SingleHidden(input_shape=output_dim, hidden_dim=hidden)
+    model_name = model.name()
+    if multi_gpu:
+        model = nn.DataParallel(model, device_ids=device_ids)
     if use_cuda:
         model = model.to(device)
 
-    if cont:
-        state_dict_fp = str(cont / "state_dict.pth")
-        model.load_state_dict(torch.load(state_dict_fp))
-
     # set optimizer
-    # TODO : set different learning rates: https://pytorch.org/docs/stable/optim.html
-    if opti == "sgd":
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
-    elif opti == "adam":
-        # same default params
-        optimizer = optim.Adam(
-            model.parameters(),
-            lr=0.001,
-            betas=(0.9, 0.999),
-            eps=1e-08,
-            weight_decay=0,
-            amsgrad=False,
-        )
-    else:
-        raise ValueError("Invalid optimization approach.")
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=0.001,
+        betas=(0.9, 0.999),
+        eps=1e-08,
+        weight_decay=0,
+        amsgrad=False,
+    )
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
 
     print("\nModel parameters:")
     for name, params in model.named_parameters():
@@ -464,23 +424,17 @@ def train_fixed_encoder(
         "std": std,
         "timestamp (DDMMYYYY_HhM)": timestamp,
         "model": model_name,
-        "model_param": {"input_shape": output_dim.tolist(), "multi_gpu": device_ids},
         "batch_size": batch_size,
         "hidden_dim": hidden,
-        "deepbig": deepbig,
-        "pool": pool,
-        "kernel_size": kernel_size,
         "noise_type": noise_type,
         "snr": None if noise_type is None else snr,
-        "dropout": dropout,
     }
     metadata_fp = model_output_dir / "metadata.json"
     with open(metadata_fp, "w") as fp:
         json.dump(metadata, fp)
 
     test_loss_fp = model_output_dir / "test_loss.npy"
-    test_acc_fp = model_output_dir / "test_acc.npy"
-    train_acc_fp = model_output_dir / "train_acc.npy"
+    train_loss_fp = model_output_dir / "train_loss.npy"
 
     print(f"Model saved to : {str(model_output_dir)}")
 
@@ -488,84 +442,71 @@ def train_fixed_encoder(
     start_time = time.time()
     if cont:
         test_loss = list(np.load(str(cont / "test_loss.npy")))
-        test_accuracy = list(np.load(str(cont / "test_acc.npy")))
-        train_accuracy = list(np.load(str(cont / "train_acc.npy")))
-        best_test_acc = np.max(test_accuracy)
-        best_test_acc_epoch = np.argmax(test_accuracy) + 1
+        train_loss = list(np.load(str(cont / "train_loss.npy")))
+        best_test_loss = np.max(test_loss)
+        best_test_loss_epoch = np.argmin(test_loss) + 1
     else:
         test_loss = []
-        test_accuracy = []
-        train_accuracy = []
-        best_test_acc = 0
-        best_test_acc_epoch = 0
+        train_loss = []
+        best_test_loss = np.inf
+        best_test_loss_epoch = 0
     for epoch in range(n_epoch):
+
         # training
         running_loss = 0.0
-        correct_cnt, total_cnt = 0, 0
-        for i, (x, target) in enumerate(train_loader):
+
+        for i, (x, target, x_orig) in enumerate(train_loader):
+
             # get inputs
             if use_cuda:
-                x, target = x.to(device), target.to(device)
+                x, target, x_orig = x.to(device), target.to(device), x_orig.to(device)
+            x_orig = x_orig.view(-1, np.prod(x_orig.size()[1:]))
 
             # zero parameters gradients
             optimizer.zero_grad()
 
             # forward, backward, optimize
             out = model(x)
-            loss = criterion(out, target)
+            loss = criterion(out, x_orig)
             loss.backward()
             optimizer.step()
-
-            # train accuracy
-            _, pred_label = torch.max(out.data, 1)
-            total_cnt += x.data.size()[0]
-            correct_cnt += (pred_label == target.data).sum()
 
             # print statistics
             running_loss += loss.item() / batch_size
             if i % batch_size == (batch_size - 1):  # print every X mini-batches
                 print(f"[{epoch + 1}, {i + 1:5d}] loss: {running_loss:.3f}")
-                running_loss = 0.0
 
-        train_acc = (correct_cnt * 1.0 / total_cnt).item()
-        train_accuracy.append(train_acc)
-        print(f"training accuracy : {train_acc:.3f}")
+        train_loss.append(running_loss)
 
         # testing
-        correct_cnt, running_loss = 0, 0
-        total_cnt = 0
-        for i, (x, target) in enumerate(test_loader):
+        running_loss = 0.0
+        for i, (x, target, x_orig) in enumerate(test_loader):
 
             # get inputs
             if use_cuda:
-                x, target = x.to(device), target.to(device)
+                x, target, x_orig = x.to(device), target.to(device), x_orig.to(device)
+            x_orig = x_orig.view(-1, np.prod(x_orig.size()[1:]))
 
             # forward, and compute loss
             out = model(x)
-            loss = criterion(out, target)
-            _, pred_label = torch.max(out.data, 1)
-            total_cnt += x.data.size()[0]
-            correct_cnt += (pred_label == target.data).sum()
-            running_loss += loss.item() / batch_size
-        _loss = running_loss
-        _acc = (correct_cnt * 1.0 / total_cnt).item()
-        print("==>>> epoch: {}, test loss: {:.6f}, acc: {:.3f}".format(epoch + 1, _loss, _acc))
-        test_loss.append(_loss)
-        test_accuracy.append(_acc)
+            loss = criterion(out, x_orig)
 
-        if _acc > best_test_acc:
+            running_loss += loss.item() / batch_size
+
+        print("==>>> epoch: {}, test loss: {:.6f}".format(epoch + 1, running_loss))
+        test_loss.append(running_loss)
+
+        if running_loss < best_test_loss:
             # save model param
-            best_test_acc = _acc
-            best_test_acc_epoch = epoch + 1
+            best_test_loss = running_loss
+            best_test_loss_epoch = epoch + 1
             torch.save(model.state_dict(), str(model_file))
 
         # save losses
         with open(test_loss_fp, "wb") as f:
             np.save(f, np.array(test_loss))
-        with open(test_acc_fp, "wb") as f:
-            np.save(f, np.array(test_accuracy))
-        with open(train_acc_fp, "wb") as f:
-            np.save(f, np.array(train_accuracy))
+        with open(train_loss_fp, "wb") as f:
+            np.save(f, np.array(train_loss))
 
     proc_time = time.time() - start_time
     print(f"Processing time [m] : {proc_time / 60}")
@@ -574,8 +515,8 @@ def train_fixed_encoder(
     ## save model metadata
     metadata.update(
         {
-            "best_test_acc": best_test_acc,
-            "best_test_acc_epoch": best_test_acc_epoch,
+            "best_test_loss": best_test_loss,
+            "best_test_loss_epoch": best_test_loss_epoch,
         }
     )
     metadata_fp = model_output_dir / "metadata.json"
@@ -586,4 +527,4 @@ def train_fixed_encoder(
 
 
 if __name__ == "__main__":
-    train_fixed_encoder()
+    train_decoder()
