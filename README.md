@@ -4,8 +4,14 @@
 ```
 conda create --name lensless_class python=3.9
 pip install -e .
-conda install -c pytorch torchvision==0.10.1 cudatoolkit=11.1 pytorch
+conda install pytorch torchvision cudatoolkit=11.3 -c pytorch
 ```
+
+For PyTorch, you can check CUDA version with
+```
+nvcc --version
+```
+And find the appropriate installation command [here](https://pytorch.org/).
 
 Install `waveprop` from source.
 
@@ -34,3 +40,19 @@ The following script can be used to run the experiments of Section 4.2:
 Both bash scripts make use of the two training scripts:
 -  `scripts/train_fixed_encoder.py`: training a fixed encoder (Lens, Coded Aperture, Diffuser, Fixed SLM (m), Fixed SLM (s)).
 -  `scripts/train_hybrid.py`: jointly training SLM with the classifier.
+
+
+## Defense to attacks experiments
+
+For convex optimization-based attack, the following command will apply the attack to a set of files (defined by command line):
+```
+# with knowledge of the mask
+python scripts/recover_from_downsampled_dataset.py \
+--output_dim 384 512 \
+--n_files 50
+
+# with random mask
+python scripts/recover_from_downsampled_dataset.py \
+--output_dim 384 512 \
+--n_files 50 --diff_slm
+```

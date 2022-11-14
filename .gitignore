@@ -1,3 +1,5 @@
+saved_images/*
+psfs/*
 data/*
 models/*
 MNIST*
