@@ -56,3 +56,19 @@ python scripts/recover_from_downsampled_dataset.py \
 --output_dim 384 512 \
 --n_files 50 --diff_slm
 ```
+
+For the generator-based attack, first a dataset from the multiple masks needs to be generated. For example, to generate a dataset from 10 learned PSFs:
+```
+python scripts/create_mix_mask_dataset.py --n_masks 10 --learned
+```
+Note that the paths to the end-to-end models needs to be specified in the script.
+
+Then to train a generator, the dataset shulud be specified with other training hyperparameters:
+```
+python scripts/train_celeba_decoder.py \
+--dataset celeba_10_learned_mixed_mask_out768_offset100000_nfiles100000 \
+--batch_size 32 --n_epoch 50 --seed 0 --model conv \
+--loss l1 --opti sgd --n_files 100000
+```
+
+
