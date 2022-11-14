@@ -36,12 +36,21 @@ except RuntimeError:
 # TODO : take into account FOV
 
 
-class MNISTAugmented(Dataset):
-    """
-    For loading an augmented dataset (simulated or measured).
-    """
+class Augmented(Dataset):
+    def __init__(
+        self,
+        path,
+        train=True,
+        transform=None,
+        dtype=torch.float32,
+        return_original=None,
+        root_original=None,
+    ):
+        """
+        return_original : dataset object
+            iterable dataset that is matched with augmented one.
 
-    def __init__(self, path, train=True, transform=None, dtype=torch.float32, return_original=None):
+        """
         self._path = path
         if train:
             self._subdir = os.path.join(path, "train")
@@ -57,16 +66,13 @@ class MNISTAugmented(Dataset):
         self.transform = transform
         self.dtype = dtype
         self.return_original = return_original
-        # if return_original:
-        #     if train:
-        #         self._subdir_orig = os.path.join(path, "train_orig")
-        #     else:
-        #         self._subdir_orig = os.path.join(path, "test_orig")
         if return_original:
 
+            assert root_original is not None, "Provide path for original dataset."
+
             transform_list = [transforms.ToTensor()]
-            self.original = datasets.MNIST(
-                root=return_original,
+            self.original = return_original(
+                root=root_original,
                 train=train,
                 download=False,
                 transform=transforms.Compose(transform_list),
@@ -77,6 +83,11 @@ class MNISTAugmented(Dataset):
         # horizontal and vertical size in pixels, whereas PyTorch expects (height, width)
 
         self.output_dim = np.array(img.size)[::-1]
+        self.n_channels = len(img.mode)
+
+    def get_image_shape(self):
+        # channels first to be consistent with Pytorch notation
+        return [self.n_channels, int(self.output_dim[0]), int(self.output_dim[1])]
 
     def get_stats(self, batch_size=100, num_workers=4):
         """
@@ -91,23 +102,28 @@ class MNISTAugmented(Dataset):
         )
 
         # placeholders
-        psum = torch.tensor([0.0])
-        psum_sq = torch.tensor([0.0])
+        psum = torch.tensor(self.n_channels * [0.0])
+        psum_sq = torch.tensor(self.n_channels * [0.0])
 
         # loop through images
+        n_files = 0
         for inputs in tqdm(image_loader):
+            n_files += inputs[0].shape[0]
             psum += inputs[0].sum(axis=[0, 2, 3])
             psum_sq += (inputs[0] ** 2).sum(axis=[0, 2, 3])
 
         # pixel count
-        count = self._n_files * np.prod(self.output_dim)
+        count = n_files * np.prod(inputs[0].shape[2:])
 
         # mean and std
         total_mean = psum / count
         total_var = (psum_sq / count) - (total_mean**2)
         total_std = torch.sqrt(total_var)
 
-        return total_mean.item(), total_std.item()
+        if self.n_channels == 1:
+            return total_mean.item(), total_std.item()
+        else:
+            return total_mean, total_std
 
     def __getitem__(self, index):
 
@@ -120,10 +136,6 @@ class MNISTAugmented(Dataset):
         if self.return_original:
             img_orig = self.original[index][0]
             return img, self._labels[index], img_orig
-        # if self.return_original:
-        #     img_path = os.path.join(self._subdir_orig, f"img{index}.png")
-        #     img_orig = transforms.ToTensor()(Image.open(img_path))
-        #     return img, self._labels[index], img_orig
         else:
             return img, self._labels[index]
 
@@ -131,13 +143,29 @@ class MNISTAugmented(Dataset):
         return self._n_files
 
 
-class MNISTPropagated(datasets.MNIST):
-    def __init__(
+class Propagated:
+    def _post_transform(self, img):
+        if self.device:
+            img = img.to(device=self.device)
+        else:
+            img = img
+
+        if self._transform_post:
+            img = self._transform_post(img)
+
+        # cast to uint8 as on sensor
+        if self.use_max_range or img.max() > 1:
+            img /= img.max()
+        img *= self.max_val
+        return img.to(dtype=self.dtype_out)
+
+    def _prepare_transforms(
         self,
         object_height,
         scene2mask,
         mask2sensor,
         sensor,
+        input_dim,
         psf_fp=None,
         single_psf=False,
         downsample_psf=None,
@@ -146,9 +174,6 @@ class MNISTPropagated(datasets.MNIST):
         vflip=True,
         grayscale=True,
         device=None,
-        root="./data",
-        train=True,
-        download=True,
         scale=(1, 1),
         max_val=255,
         use_max_range=True,
@@ -161,24 +186,15 @@ class MNISTPropagated(datasets.MNIST):
         random_height=None,
         rotate=False,
         perspective=False,
-        return_original=True,
         **kwargs,
     ):
-        """
-        downsample_psf : float
-            Downsample PSF to do smaller convolution.
-        crop_psf : int
-            To be used for lens PSF! How much to crop around peak of lens to extract the PSF.
-        use_max_range : bool
-            Whether to maximym bit depth, or leave it to arbitrary maximum based on simulation.
-        """
+
         self.dtype = dtype
         self.dtype_out = dtype_out
         self.max_val = max_val
         self.use_max_range = use_max_range
-        self.return_original = return_original
 
-        self.input_dim = np.array([28, 28])
+        self.input_dim = np.array(input_dim[:2])
         sensor_param = sensor_dict[sensor]
         sensor_size = sensor_param[SensorParam.SIZE]
 
@@ -210,13 +226,10 @@ class MNISTPropagated(datasets.MNIST):
 
             # reorder axis to [channels, width, height]
             if grayscale and not single_psf:
+                # convert PSF to grayscale
                 psf = rgb2gray(psf).astype(dtype)
                 psf = psf[np.newaxis, :, :]
                 self.conv_dim[2] = 1
-                # if psf.shape[0] == 3:
-                #     psf = rgb2gray(psf).astype(dtype)
-                # else:
-                #     psf = psf.squeeze()
             else:
                 psf = np.transpose(psf, (2, 0, 1))
 
@@ -241,10 +254,10 @@ class MNISTPropagated(datasets.MNIST):
         magnification = mask2sensor / scene2mask
         self.scene_dim = sensor_size / magnification
 
-        if random_height is not None:
+        if random_height:
             # TODO combine with shifting which needs to know padding
             assert len(random_height) == 2
-            assert random_height[0] < random_height[1]
+            assert random_height[0] <= random_height[1]
 
             def random_scale(image):
 
@@ -304,10 +317,16 @@ class MNISTPropagated(datasets.MNIST):
 
             transform_list.append(shift_within_sensor)
 
-        if not grayscale:
-            transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))
+        if grayscale:
+            if input_dim[2] != 1:
+                # convert to grayscale
+                transform_list.append(transforms.Grayscale(num_output_channels=1))
+        else:
+            if input_dim[2] == 1:
+                # 2D image so repeat on all channels
+                transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))
 
-        transform = transforms.Compose(transform_list)
+        self._transform = transforms.Compose(transform_list)
 
         # -- to do convolution on GPU (must faster)
         self._transform_post = None
@@ -318,8 +337,7 @@ class MNISTPropagated(datasets.MNIST):
             self._transform_post.append(conv_op)
 
             # -- resize to output dimension
-            # more manageable to train on and perhaps don't need so many DOF
-            if output_dim:
+            if output_dim is not None:
                 if down == "resize":
                     self._transform_post.append(transforms.Resize(size=output_dim))
                 elif down == "max" or down == "avg":
@@ -353,37 +371,73 @@ class MNISTPropagated(datasets.MNIST):
             self._transform_post = transforms.Compose(self._transform_post)
 
         self.device = device
-        super().__init__(root=root, train=train, download=download, transform=transform)
-        if return_original:
-            self.original = datasets.MNIST(
-                root=root,
-                train=train,
-                download=download,
-                transform=transforms.Compose([np.array]),
-                # transform=transforms.Compose([transforms.ToTensor()]),
-            )
+
+
+"""
+MNIST
+"""
+
+
+class MNISTPropagated(datasets.MNIST, Propagated):
+    def __init__(
+        self,
+        root="./data",
+        train=True,
+        download=True,
+        input_dim=[28, 28, 1],
+        **kwargs,
+    ):
+
+        self._prepare_transforms(input_dim=input_dim, **kwargs)
+        super(MNISTPropagated, self).__init__(
+            root=root, train=train, download=download, transform=self._transform
+        )
 
     def __getitem__(self, index):
 
-        if self.device:
-            img = res[0].to(device=self.device)
-        else:
-            img = res[0]
+        res = super().__getitem__(index)
+        img = self._post_transform(res[0])
+        return img, res[1]
 
-        if self._transform_post:
-            img = self._transform_post(img)
 
-        # cast to uint8 as on sensor
-        if self.use_max_range or img.max() > 1:
-            img /= img.max()
-        img *= self.max_val
-        img = img.to(dtype=self.dtype_out)
+"""
+CIFAR10
+"""
 
-        if self.return_original:
-            res_orig = self.original[index][0]
-            return img, res[1], res_orig
-        else:
-            return img, res[1]
+CIFAR_CLASSES = [
+    "airplanes",
+    "cars",
+    "birds",
+    "cats",
+    "deer",
+    "dogs",
+    "frogs",
+    "horses",
+    "ships",
+    "trucks",
+]
+
+
+class CIFAR10Propagated(datasets.CIFAR10, Propagated):
+    def __init__(
+        self,
+        root="./data",
+        train=True,
+        download=True,
+        input_dim=[32, 32, 3],
+        **kwargs,
+    ):
+
+        self._prepare_transforms(input_dim=input_dim, **kwargs)
+        super(CIFAR10Propagated, self).__init__(
+            root=root, train=train, download=download, transform=self._transform
+        )
+
+    def __getitem__(self, index):
+
+        res = super().__getitem__(index)
+        img = self._post_transform(res[0])
+        return img, res[1]
 
 
 """"
@@ -440,11 +494,19 @@ class CelebAAugmented(Dataset):
     """
 
     def __init__(
-        self, path, transform=None, dtype=torch.float32, return_original=None, grayscale=True
+        self,
+        path,
+        transform=None,
+        dtype=torch.float32,
+        return_original=None,
+        grayscale=True,
+        target_dim=None,
+        offset=0,
     ):
         self._path = path
         self._subdir = os.path.join(path, "all")
         self._n_files = len(glob.glob(os.path.join(self._subdir, "img*.png")))
+        self._offset = offset
 
         self._labels = []
         with open(os.path.join(self._subdir, "labels.txt")) as f:
@@ -460,6 +522,8 @@ class CelebAAugmented(Dataset):
         self.return_original = return_original
         if return_original:
             transform_list = [transforms.ToTensor()]
+            if target_dim:
+                transform_list.append(transforms.Resize(size=target_dim))
             if grayscale:
                 transform_list.append(transforms.Grayscale(num_output_channels=1))
             self.original = datasets.CelebA(
@@ -476,16 +540,18 @@ class CelebAAugmented(Dataset):
 
     def __getitem__(self, index):
 
-        img_path = os.path.join(self._subdir, f"img{index}.png")
+        img_path = os.path.join(self._subdir, f"img{index + self._offset}.png")
         img = Image.open(img_path)
 
         if self.transform:
             img = self.transform(img)
 
         if self.return_original:
-            img_orig = self.original[index][0]
+            img_orig = self.original[index + self._offset][0]
+            # return img, self._labels[index - self._offset], img_orig
             return img, self._labels[index], img_orig
         else:
+            # return img, self._labels[index - self._offset]
             return img, self._labels[index]
 
     def __len__(self):
@@ -521,6 +587,66 @@ class AddNoise:
         return torch.tensor(np.array(noisy).astype(self.dtype)).to(measurement)
 
 
+def prep_psf(
+    fp,
+    dtype=np.float32,
+    grayscale=False,
+    downsample_psf=1,
+    single_psf=False,
+    device_conv="cpu",
+    crop_psf=False,
+    torch_tensor=True,
+):
+
+    psf = load_psf(fp=fp, single_psf=single_psf, dtype=dtype)
+
+    if crop_psf:
+        # for compact support PSF like lens
+        # -- keep full convolution
+        conv_dim = np.array(psf.shape)
+
+        # -- crop PSF around peak
+        center = np.unravel_index(np.argmax(psf, axis=None), psf.shape)
+        top = int(center[0] - crop_psf / 2)
+        left = int(center[1] - crop_psf / 2)
+        psf = psf[top : top + crop_psf, left : left + crop_psf]
+
+    else:
+        # for PSFs with large support, e.g. lensless
+        if downsample_psf > 1:
+            psf = resize(psf, 1 / downsample_psf, interpolation=cv2.INTER_CUBIC).astype(dtype)
+            if single_psf:
+                # cv2 drops the last dimension when it's 1..
+                psf = psf[:, :, np.newaxis]
+        conv_dim = np.array(psf.shape)
+
+    # reorder axis to [channels, width, height]
+    # keep conv_dim as (width, height, channels)
+    if grayscale and not single_psf:
+        psf = rgb2gray(psf).astype(dtype)
+        psf = psf[:, :, np.newaxis]
+        conv_dim[2] = 1
+
+        # again remove background and normalize (do in lenslesspicam?)
+        bg_pix = (5, 25)
+        bg = np.mean(psf[bg_pix[0] : bg_pix[1], bg_pix[0] : bg_pix[1]])
+        psf -= bg
+        psf /= np.linalg.norm(psf.ravel())
+
+    # cast as torch array
+    if torch_tensor:
+
+        # reorder axis to [channels, width, height]
+        psf = np.transpose(psf, (2, 0, 1))
+        psf = torch.tensor(psf, device=device_conv)
+
+    else:
+
+        psf = np.squeeze(psf)
+
+    return psf, conv_dim
+
+
 class CelebAPropagated(datasets.CelebA):
     def __init__(
         self,
@@ -534,7 +660,7 @@ class CelebAPropagated(datasets.CelebA):
         downsample_psf=None,
         output_dim=None,
         crop_psf=False,
-        vflip=True,
+        vflip=False,
         grayscale=True,
         device_conv=None,
         root="./data",
@@ -545,7 +671,6 @@ class CelebAPropagated(datasets.CelebA):
         noise_type=None,
         snr=40,
         use_max_range=True,
-        return_original=False,
         **kwargs,
     ):
         """
@@ -563,7 +688,6 @@ class CelebAPropagated(datasets.CelebA):
         self.dtype = dtype
         self.dtype_out = dtype_out
         self.use_max_range = use_max_range
-        self.return_original = return_original
 
         self.input_dim = np.array([218, 178])
         sensor_param = sensor_dict[sensor]
@@ -571,40 +695,76 @@ class CelebAPropagated(datasets.CelebA):
 
         # -- load PSF
         if psf_fp is not None:
-            psf = load_psf(fp=psf_fp, single_psf=single_psf, dtype=dtype)
 
-            if crop_psf:
-                # for compact support PSF like lens
-                # -- keep full convolution
-                self.conv_dim = np.array(psf.shape)
+            if isinstance(psf_fp, list):
 
-                # -- crop PSF around peak
-                center = np.unravel_index(np.argmax(psf, axis=None), psf.shape)
-                top = int(center[0] - crop_psf / 2)
-                left = int(center[1] - crop_psf / 2)
-                psf = psf[top : top + crop_psf, left : left + crop_psf]
-
-            else:
-                # for PSFs with large support, e.g. lensless
-                if downsample_psf:
-                    psf = resize(psf, 1 / downsample_psf, interpolation=cv2.INTER_CUBIC).astype(
-                        dtype
+                psf = []
+                last_conv_dim = None
+                for _fp in psf_fp:
+                    _psf, conv_dim = prep_psf(
+                        _fp,
+                        single_psf=single_psf,
+                        dtype=dtype,
+                        crop_psf=crop_psf,
+                        downsample_psf=downsample_psf,
+                        grayscale=grayscale,
+                        device_conv=device_conv,
                     )
-                    if single_psf:
-                        # cv2 drops the last dimension when it's 1..
-                        psf = psf[:, :, np.newaxis]
-                self.conv_dim = np.array(psf.shape)
+                    if last_conv_dim is not None:
+                        np.testing.assert_equal(
+                            conv_dim, last_conv_dim, err_msg="PSFs must have same dimension."
+                        )
+                    last_conv_dim = conv_dim
+                    psf.append(_psf)
 
-            # reorder axis to [channels, width, height]
-            if grayscale and not single_psf:
-                psf = rgb2gray(psf).astype(dtype)
-                psf = psf[np.newaxis, :, :]
-                self.conv_dim[2] = 1
             else:
-                psf = np.transpose(psf, (2, 0, 1))
+                psf, conv_dim = prep_psf(
+                    psf_fp,
+                    single_psf=single_psf,
+                    dtype=dtype,
+                    crop_psf=crop_psf,
+                    downsample_psf=downsample_psf,
+                    grayscale=grayscale,
+                    device_conv=device_conv,
+                )
 
-            # cast as torch array
-            psf = torch.tensor(psf, device=device_conv)
+            self.conv_dim = conv_dim
+
+            # psf = load_psf(fp=psf_fp, single_psf=single_psf, dtype=dtype)
+
+            # if crop_psf:
+            #     # for compact support PSF like lens
+            #     # -- keep full convolution
+            #     self.conv_dim = np.array(psf.shape)
+
+            #     # -- crop PSF around peak
+            #     center = np.unravel_index(np.argmax(psf, axis=None), psf.shape)
+            #     top = int(center[0] - crop_psf / 2)
+            #     left = int(center[1] - crop_psf / 2)
+            #     psf = psf[top : top + crop_psf, left : left + crop_psf]
+
+            # else:
+            #     # for PSFs with large support, e.g. lensless
+            #     if downsample_psf:
+            #         psf = resize(psf, 1 / downsample_psf, interpolation=cv2.INTER_CUBIC).astype(
+            #             dtype
+            #         )
+            #         if single_psf:
+            #             # cv2 drops the last dimension when it's 1..
+            #             psf = psf[:, :, np.newaxis]
+            #     self.conv_dim = np.array(psf.shape)
+
+            # # reorder axis to [channels, width, height]
+            # if grayscale and not single_psf:
+            #     psf = rgb2gray(psf).astype(dtype)
+            #     psf = psf[np.newaxis, :, :]
+            #     self.conv_dim[2] = 1
+            # else:
+            #     psf = np.transpose(psf, (2, 0, 1))
+
+            # # cast as torch array
+            # psf = torch.tensor(psf, device=device_conv)
+
         else:
             # no PSF as we learn SLM. Simulate until mask
             # output dimensions is same as dimension (before) convolution
@@ -642,13 +802,25 @@ class CelebAPropagated(datasets.CelebA):
             transform_list.append(transforms.Grayscale(num_output_channels=1))
 
         if self.psf is not None:
-            self._transform_post = []
 
-            # -- to do convolution on GPU (must faster)
-            conv_op = RealFFTConvolve2D(
-                self.psf, img_shape=np.roll(self.conv_dim, shift=1), device=device_conv
-            )
+            # -- to do convolution on GPU (much faster)
+            if isinstance(self.psf, list):
+                conv_ops = [
+                    RealFFTConvolve2D(
+                        _psf, img_shape=np.roll(self.conv_dim, shift=1), device=device_conv
+                    )
+                    for _psf in self.psf
+                ]
+                conv_op = transforms.RandomChoice(conv_ops)
+            else:
+                conv_op = RealFFTConvolve2D(
+                    self.psf, img_shape=np.roll(self.conv_dim, shift=1), device=device_conv
+                )
             transform_list.append(conv_op)
+
+            # -- resize to output dimension
+            if output_dim is not None:
+                transform_list.append(transforms.Resize(size=output_dim))
 
             if noise_type:
                 if noise_type == "poisson":
@@ -661,23 +833,8 @@ class CelebAPropagated(datasets.CelebA):
                         noise_mean = 0
                     transform_list.append(AddNoise(snr, noise_type, noise_mean, dtype))
 
-            # -- resize to output dimension
-            # more manageable to train on and perhaps don't need so many DOF
-            if output_dim:
-                transform_list.append(transforms.Resize(size=output_dim))
-
         transform = transforms.Compose(transform_list)
         super().__init__(root=root, split=split, download=False, transform=transform)
-
-        if return_original:
-            print("TODO : REMOVE")
-            self.original = datasets.CelebA(
-                root=root,
-                split=split,
-                download=False,
-                transform=transforms.Compose([np.array]),
-                # transform=transforms.Compose([transforms.ToTensor()]),
-            )
 
         # index extract label
         self.label = attribute
@@ -701,11 +858,7 @@ class CelebAPropagated(datasets.CelebA):
         else:
             label = res[1]
 
-        if self.return_original:
-            res_orig = self.original[index][0]
-            return img, label, res_orig
-        else:
-            return img, label
+        return img, label
 
 
 def get_object_height_pix(object_height, mask2sensor, scene2mask, sensor_dim, target_dim):
@@ -791,7 +944,7 @@ def simulate_propagated_dataset(
     rotate=False,
     perspective=False,
     use_max_range=True,
-    return_original=False,
+    offset=0,
 ):
     """
     psf : str
@@ -800,6 +953,10 @@ def simulate_propagated_dataset(
     output_dir : str
         Where to save simulated dataset.
     """
+
+    if dataset == "CELEBA":
+        # for backward compatability
+        dataset = "celeba"
 
     sensor_param = sensor_dict[sensor]
     if object_height is None:
@@ -851,6 +1008,8 @@ def simulate_propagated_dataset(
         output_dir += f"_RandomRotate{rotate}"
     if perspective:
         output_dir += f"_RandomPerspective{perspective}"
+    if offset:
+        output_dir += f"_{offset}offset"
     if n_files:
         output_dir += f"_{n_files}files"
 
@@ -883,16 +1042,22 @@ def simulate_propagated_dataset(
         "perspective": perspective,
         "random_height": random_height.tolist() if random_height is not None else None,
         "use_max_range": use_max_range,
-        "return_original": return_original,
     }
+
     if dataset == "MNIST":
         ds_train = MNISTPropagated(**args, train=True)
         train_subdir = "train"
         ds_test = MNISTPropagated(**args, train=False)
+    elif dataset == "CIFAR10":
+        ds_train = CIFAR10Propagated(**args, train=True)
+        train_subdir = "train"
+        ds_test = CIFAR10Propagated(**args, train=False)
     elif dataset == "celeba":
         ds_train = CelebAPropagated(**args, split="all")
         train_subdir = "all"
         ds_test = None
+    else:
+        raise ValueError(f"Unsupported dataset : {dataset}")
 
     ## loop over samples and save
     output_dir = plib.Path(output_dir)
@@ -907,10 +1072,6 @@ def simulate_propagated_dataset(
     train_output = output_dir / train_subdir
     if not os.path.isdir(train_output):
         train_output.mkdir(exist_ok=True)
-    if return_original:
-        train_orig = output_dir / (train_subdir + "_orig")
-        if not os.path.isdir(train_orig):
-            train_orig.mkdir(exist_ok=True)
 
     train_labels = []
     start_time = time.time()
@@ -926,13 +1087,10 @@ def simulate_propagated_dataset(
         n_files_train = n_files
 
     n_png = len(list(train_output.glob("*.png")))
-    if return_original:
-        n_orig = len(list(train_orig.glob("*.png")))
-        n_png = min(n_png, n_orig)
     if n_png < n_files_train:
         print(f"TRAIN SET : Augmenting {n_files_train - n_png} files...")
 
-        n_batch_complete = n_png // batch_size
+        n_batch_complete = n_png // batch_size + offset // batch_size
         reached_n_files = False
 
         if n_png:
@@ -942,16 +1100,16 @@ def simulate_propagated_dataset(
 
         for batch_idx, batch in enumerate(train_loader, start=n_batch_complete):
 
-            if return_original:
-                x, target, orig = batch
-            else:
-                x, target = batch
+            x, target = batch
 
             for sample_idx, data in enumerate(x):
 
                 i = batch_idx * batch_size + sample_idx
 
-                if i == n_files_train:
+                if i < offset:
+                    continue
+
+                if (i - offset) == n_files_train:
                     reached_n_files = True
                     break
 
@@ -962,12 +1120,6 @@ def simulate_propagated_dataset(
                     train_labels.append(torch.load(label_fp))
                 else:
                     img_data = data.cpu().numpy().squeeze()
-
-                    if return_original:
-                        orig_fp = train_orig / f"img{i}.png"
-                        orig_data = orig[sample_idx].numpy().squeeze()
-                        im = Image.fromarray(orig_data)
-                        im.save(orig_fp)
 
                     if img_data.dtype == np.uint8:
                         # save as viewable images
@@ -989,7 +1141,7 @@ def simulate_propagated_dataset(
 
                 if i % print_progress == (print_progress - 1):
                     proc_time = time.time() - start_time
-                    print(f"{i + 1} / {n_files_train} examples, {proc_time / 60} minutes")
+                    print(f"{i + 1 - offset} / {n_files_train} examples, {proc_time / 60} minutes")
 
             if reached_n_files:
                 break
@@ -1008,10 +1160,6 @@ def simulate_propagated_dataset(
         test_output = output_dir / "test"
         if not os.path.isdir(test_output):
             test_output.mkdir(exist_ok=True)
-        if return_original:
-            test_orig = output_dir / "test_orig"
-            if not os.path.isdir(test_orig):
-                test_orig.mkdir(exist_ok=True)
 
         test_labels = []
         start_time = time.time()
@@ -1041,10 +1189,7 @@ def simulate_propagated_dataset(
 
             for batch_idx, batch in enumerate(test_loader, start=n_batch_complete):
 
-                if return_original:
-                    x, target, orig = batch
-                else:
-                    x, target = batch
+                x, target = batch
 
                 for sample_idx, data in enumerate(x):
 
@@ -1060,12 +1205,6 @@ def simulate_propagated_dataset(
                     if os.path.isfile(output_fp) and os.path.isfile(label_fp):
                         test_labels.append(torch.load(label_fp))
                     else:
-
-                        if return_original:
-                            orig_fp = test_orig / f"img{i}.png"
-                            orig_data = orig[sample_idx].numpy().squeeze()
-                            im = Image.fromarray(orig_data)
-                            im.save(orig_fp)
 
                         img_data = data.cpu().numpy().squeeze()
 

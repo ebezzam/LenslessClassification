@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch
 import warnings
 from torchvision import transforms
-from torchvision.transforms.functional import rgb_to_grayscale
+from torchvision.transforms.functional import rgb_to_grayscale, resize
 import numpy as np
 from waveprop.slm import get_active_pixel_dim, get_slm_mask
 from waveprop.pytorch_util import fftconvolve
@@ -16,6 +16,8 @@ from scipy import ndimage
 from lenslessclass.util import AddPoissonNoise
 from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, SensorParam
 from collections import OrderedDict
+import cv2
+from lenslessclass.vgg import VGG
 
 
 class MultiClassLogistic(nn.Module):
@@ -23,10 +25,10 @@ class MultiClassLogistic(nn.Module):
     Example: https://gist.github.com/xmfbit/b27cdbff68870418bdb8cefa86a2d558
     """
 
-    def __init__(self, input_shape, multi_gpu=False):
+    def __init__(self, input_shape, multi_gpu=False, n_class=10):
         super(MultiClassLogistic, self).__init__()
         self.flatten = nn.Flatten()
-        self.linear1 = nn.Linear(int(np.prod(input_shape)), 10)
+        self.linear1 = nn.Linear(int(np.prod(input_shape)), n_class)
         self.decision = nn.Softmax(dim=1)
 
         if multi_gpu:
@@ -62,15 +64,27 @@ class SingleHidden(nn.Module):
     Example: https://gist.github.com/xmfbit/b27cdbff68870418bdb8cefa86a2d558
     """
 
-    def __init__(self, input_shape, hidden_dim, n_class):
+    def __init__(self, input_shape, hidden_dim, n_class, bn=True, dropout=None):
         assert isinstance(hidden_dim, int)
         self.hidden_dim = hidden_dim
         super(SingleHidden, self).__init__()
         self.flatten = nn.Flatten()
-        self.linear1 = nn.Linear(int(np.prod(input_shape)), hidden_dim, bias=False)
-        self.bn1 = nn.BatchNorm1d(hidden_dim)  # ADDED to be consistent with SLM
+        if bn:
+            self.linear1 = nn.Linear(int(np.prod(input_shape)), hidden_dim, bias=False)
+            self.bn1 = nn.BatchNorm1d(hidden_dim)  # ADDED to be consistent with SLM
+        else:
+            self.linear1 = nn.Linear(int(np.prod(input_shape)), hidden_dim, bias=True)
+            self.bn1 = None
         self.activation1 = nn.ReLU()
         self.linear2 = nn.Linear(hidden_dim, n_class)
+
+        if dropout:
+            self.dropout_rate = dropout
+            self.dropout = nn.Dropout(dropout)
+        else:
+            self.dropout_rate = None
+            self.dropout = None
+
         if n_class > 1:
             self.decision = nn.Softmax(dim=1)
         else:
@@ -78,14 +92,21 @@ class SingleHidden(nn.Module):
 
     def forward(self, x):
         x = self.flatten(x)
-        # x = self.activation1(self.linear1(x))
-        x = self.activation1(self.bn1(self.linear1(x)))  # ADDED to be consistent with SLM
+        if self.bn1 is not None:
+            x = self.activation1(self.bn1(self.linear1(x)))  # ADDED to be consistent with SLM
+        else:
+            x = self.activation1(self.linear1(x))
+        if self.dropout is not None:
+            x = self.dropout(x)
         x = self.linear2(x)
         logits = self.decision(x)
         return logits
 
     def name(self):
-        return f"SingleHidden{self.hidden_dim}"
+        model_name = f"SingleHidden{self.hidden_dim}"
+        if self.dropout:
+            model_name += f"drop{self.dropout_rate}"
+        return model_name
 
 
 class TwoHidden(nn.Module):
@@ -139,10 +160,22 @@ def conv_output_dim(input_dim, kernel, padding=0, stride=1, pooling=1):
 
 
 class CNNLite(nn.Module):
-    def __init__(self, input_shape, n_class, n_kern=10, bn=True, kernel_size=3, pool=2, hidden=800):
+    def __init__(
+        self,
+        input_shape,
+        n_class,
+        n_kern=10,
+        bn=True,
+        kernel_size=3,
+        pool=2,
+        hidden=800,
+        dropout=None,
+    ):
         """
         Single convolution layer -> flatten > fully connected > softmax
         """
+
+        assert len(input_shape) == 2
 
         super().__init__()
         self.n_kern = n_kern
@@ -174,6 +207,13 @@ class CNNLite(nn.Module):
             #     self.fc1 = nn.Linear(self.n_kern * np.prod(output_dim), n_class)
             #     self.bn1 = None
 
+        if dropout:
+            self.dropout_rate = dropout
+            self.dropout = nn.Dropout(dropout)
+        else:
+            self.dropout_rate = None
+            self.dropout = None
+
         if n_class > 1:
             self.decision = nn.Softmax(dim=1)
         else:
@@ -186,20 +226,26 @@ class CNNLite(nn.Module):
         if self.pool > 1:
             x = F.max_pool2d(x, (self.pool, self.pool))
         x = torch.flatten(x, 1)  # flatten all dimensions except the batch dimension
+        if self.dropout:
+            x = self.dropout(x)
 
         if self.hidden:
             if self.bn1 is not None:
                 x = F.relu(self.bn1(self.fc1(x)))
             else:
                 x = F.relu(self.fc1(x))
+            if self.dropout:
+                x = self.dropout(x)
             x = self.fc2(x)
         else:
             x = self.fc1(x)
-        logits = self.decision(x)
-        return logits
+        return self.decision(x)
 
     def name(self):
-        return f"CNNLite{self.n_kern}_FC{self.hidden}"
+        model_name = f"CNNLite{self.n_kern}_FC{self.hidden}"
+        if self.dropout:
+            model_name = model_name + f"_dropout{self.dropout_rate}"
+        return model_name
 
 
 class CNN(nn.Module):
@@ -339,6 +385,8 @@ class SLMMultiClassLogistic(nn.Module):
         kernel_size=3,
         pool=2,
         cnn_lite=None,
+        bn=True,
+        vgg=None,
         **kwargs,
     ):
         """
@@ -354,6 +402,9 @@ class SLMMultiClassLogistic(nn.Module):
             self.ctype = torch.complex128
         else:
             raise ValueError(f"Unsupported data type : {dtype}")
+
+        if len(input_shape) == 2:
+            input_shape = [1] + list(input_shape)
 
         # store configuration
         self.input_shape = np.array(input_shape)
@@ -424,6 +475,7 @@ class SLMMultiClassLogistic(nn.Module):
 
         # -- downsampling
         self.downsample = None
+
         if self.target_dim is not None or output_dim is not None:
             if output_dim is None:
                 sensor_size = sensor_config[SensorParam.SHAPE]
@@ -433,20 +485,23 @@ class SLMMultiClassLogistic(nn.Module):
             else:
                 self.output_dim = np.array(output_dim)
 
+            if not grayscale:
+                self.output_dim = np.r_[self.output_dim, 3]
+
             if down == "resize":
 
-                self.downsample = transforms.Resize(size=self.output_dim.tolist())
+                self.downsample = transforms.Resize(size=self.output_dim[:2].tolist())
 
             elif down == "max" or down == "avg":
                 n_embedding = np.prod(self.output_dim)
 
                 # determine filter size, stride, and padding: https://androidkt.com/calculate-output-size-convolutional-pooling-layers-cnn/
-                k = int(np.ceil(np.sqrt(np.prod(self.input_shape) / n_embedding)))
+                k = int(np.ceil(np.sqrt(np.prod(self.input_shape[1:]) / n_embedding)))
                 p = np.roots(
                     [
                         4,
                         2 * np.sum(self.input_shape),
-                        np.prod(self.input_shape) - k**2 * n_embedding,
+                        np.prod(self.input_shape[1:]) - k**2 * n_embedding,
                     ]
                 )
                 p = max(int(np.max(p)), 0) + 1
@@ -454,8 +509,8 @@ class SLMMultiClassLogistic(nn.Module):
                     self.downsample = nn.MaxPool2d(kernel_size=k, stride=k, padding=p)
                 else:
                     self.downsample = nn.AvgPool2d(kernel_size=k, stride=k, padding=p)
-                pooling_outdim = ((self.input_shape - k + 2 * p) / k + 1).astype(int)
-                assert np.array_equal(self.output_dim, pooling_outdim)
+                pooling_outdim = ((self.input_shape[1:] - k + 2 * p) / k + 1).astype(int)
+                assert np.array_equal(self.output_dim[:2], pooling_outdim)
             else:
                 raise ValueError("Invalid downsampling approach.")
         else:
@@ -471,34 +526,13 @@ class SLMMultiClassLogistic(nn.Module):
         else:
             self.dropout = None
 
-        # -- remove bias from linear layers before batch norm: https://stackoverflow.com/a/59736545
-        # linear_layers = []
-        # if self.hidden is not None:
-        #     linear_layers += [
-        #         ('linear1', nn.Linear(self.n_hidden, self.hidden, bias=False)),
-        #         ('bn', nn.BatchNorm1d(self.hidden)),
-        #         ('relu1', nn.ReLU()),
-        #     ]
-        #     if self.hidden2 is not None:
-        #         linear_layers += [
-        #             ('linear2', nn.Linear(self.hidden, self.hidden2, bias=False)),
-        #             ('bn', nn.BatchNorm1d(self.hidden2)),
-        #             ('relu1', nn.ReLU()),
-        #             ('linear3', nn.Linear(self.hidden2, n_class)),
-        #         ]
-        #     else:
-        #         linear_layers.append(
-        #             ('linear2', nn.Linear(self.hidden, n_class))
-        #         )
-        # else:
-        #     linear_layers.append(
-        #         ('linear1', nn.Linear(self.n_hidden, self.hidden, bias=False))
-        #     )
-        # self.linear_layers = nn.Sequential(OrderedDict(linear_layers))
-
         self.n_kern = n_kern
         self.cnn_lite = cnn_lite
-        if cnn_lite:
+        self.classifier = None
+        self.vgg = vgg
+        if vgg:
+            self.classifier = VGG(vgg, input_shape=np.roll(self.output_dim, shift=1))
+        elif cnn_lite:
             self.classifier = CNNLite(
                 input_shape=self.output_dim,
                 n_kern=cnn_lite,
@@ -506,43 +540,66 @@ class SLMMultiClassLogistic(nn.Module):
                 n_class=n_class,
                 hidden=hidden,
                 pool=pool,
+                dropout=dropout,
             )
         elif n_kern:
             self.classifier = CNN(
                 input_shape=self.output_dim,
                 n_class=n_class,
                 n_kern=n_kern,
-                bn=True,
+                bn=bn,
                 kernel_size=kernel_size,
                 pool=pool,
             )
         elif self.hidden2 is not None:
             assert self.hidden is not None
-            self.linear_layers = nn.Sequential(
-                OrderedDict(
-                    [
-                        (
-                            "linear1",
-                            nn.Linear(self.n_slm_mask * self.n_hidden, self.hidden, bias=False),
-                        ),
-                        ("bn", nn.BatchNorm1d(self.hidden)),
-                        ("relu1", nn.ReLU()),
-                        ("linear2", nn.Linear(self.hidden, self.hidden2, bias=False)),
-                        ("bn2", nn.BatchNorm1d(self.hidden2)),
-                        ("relu2", nn.ReLU()),
-                        ("linear3", nn.Linear(self.hidden2, n_class)),
-                    ]
+            if bn:
+                self.linear_layers = nn.Sequential(
+                    OrderedDict(
+                        [
+                            (
+                                "linear1",
+                                nn.Linear(self.n_slm_mask * self.n_hidden, self.hidden, bias=False),
+                            ),
+                            ("bn", nn.BatchNorm1d(self.hidden)),
+                            ("relu1", nn.ReLU()),
+                            ("linear2", nn.Linear(self.hidden, self.hidden2, bias=False)),
+                            ("bn2", nn.BatchNorm1d(self.hidden2)),
+                            ("relu2", nn.ReLU()),
+                            ("linear3", nn.Linear(self.hidden2, n_class)),
+                        ]
+                    )
                 )
-            )
+            else:
+                self.linear_layers = nn.Sequential(
+                    OrderedDict(
+                        [
+                            (
+                                "linear1",
+                                nn.Linear(self.n_slm_mask * self.n_hidden, self.hidden, bias=True),
+                            ),
+                            ("relu1", nn.ReLU()),
+                            ("linear2", nn.Linear(self.hidden, self.hidden2, bias=True)),
+                            ("relu2", nn.ReLU()),
+                            ("linear3", nn.Linear(self.hidden2, n_class)),
+                        ]
+                    )
+                )
         else:
+            self.bn = None
             if self.hidden is not None and self.hidden:
-                self.linear1 = nn.Linear(self.n_slm_mask * self.n_hidden, self.hidden, bias=False)
-                self.bn = nn.BatchNorm1d(self.hidden)
+                if bn:
+                    self.linear1 = nn.Linear(
+                        self.n_slm_mask * self.n_hidden, self.hidden, bias=False
+                    )
+                    self.bn = nn.BatchNorm1d(self.hidden)
+                else:
+                    self.linear1 = nn.Linear(
+                        self.n_slm_mask * self.n_hidden, self.hidden, bias=True
+                    )
                 self.linear2 = nn.Linear(self.hidden, n_class)
             else:
-
                 self.linear1 = nn.Linear(self.n_slm_mask * self.n_hidden, n_class)
-                self.bn = None
                 self.linear2 = None
             self.linear_layers = None
 
@@ -560,9 +617,11 @@ class SLMMultiClassLogistic(nn.Module):
 
         # -- initialize SLM values, set as parameter to optimize
         # TODO : need to make internal changes to get_slm_mask for no deadspace
+        # rand_func = torch.rand
+        rand_func = torch.randn
         if deadspace:
             if self.n_slm_mask == 1:
-                self.slm_vals = torch.rand(
+                self.slm_vals = rand_func(
                     *n_active_slm_pixels,
                     dtype=dtype,
                     device=self.device,
@@ -572,7 +631,7 @@ class SLMMultiClassLogistic(nn.Module):
                     self.slm_vals = nn.Parameter(self.slm_vals)
             else:
                 self.slm_vals = [
-                    torch.rand(
+                    rand_func(
                         *n_active_slm_pixels,
                         dtype=dtype,
                         device=self.device,
@@ -585,26 +644,10 @@ class SLMMultiClassLogistic(nn.Module):
                         [nn.Parameter(self.slm_vals[i]) for i in range(self.n_slm_mask)]
                     )
 
-            # if self.requires_grad:
-            #     self.slm_vals = nn.Parameter(
-            #         torch.rand(
-            #             *n_active_slm_pixels,
-            #             dtype=dtype,
-            #             device=self.device,
-            #             requires_grad=self.requires_grad,
-            #         )
-            #     )
-            # else:
-            #     self.slm_vals = torch.rand(
-            #         *n_active_slm_pixels,
-            #         dtype=dtype,
-            #         device=self.device,
-            #         requires_grad=self.requires_grad,
-            #     )
         else:
             if self.requires_grad:
                 self.slm_vals = nn.Parameter(
-                    torch.rand(
+                    rand_func(
                         *overlapping_mask_dim,
                         dtype=dtype,
                         device=self.device,
@@ -612,7 +655,7 @@ class SLMMultiClassLogistic(nn.Module):
                     )
                 )
             else:
-                self.slm_vals = torch.rand(
+                self.slm_vals = rand_func(
                     *overlapping_mask_dim,
                     dtype=dtype,
                     device=self.device,
@@ -628,9 +671,9 @@ class SLMMultiClassLogistic(nn.Module):
         # -- initialize PSF from SLM values and pre-compute constants
         # object to mask (modeled with spherical propagation which can be pre-computed)
         self.color_system = ColorSystem.rgb()
-        self.d1 = np.array(overlapping_mask_size) / input_shape
+        self.d1 = np.array(overlapping_mask_size) / self.input_shape[1:]
         self.spherical_wavefront = spherical_prop(
-            in_shape=input_shape,
+            in_shape=self.input_shape[1:],
             d1=self.d1,
             wv=self.color_system.wv,
             dz=self.scene2mask,
@@ -643,12 +686,14 @@ class SLMMultiClassLogistic(nn.Module):
         self._psf = None
         self._H = None  # pre-compute free space propagation kernel
         self._H_exp = None
-        self.compute_intensity_psf()
+
+        slm_vals = self.get_slm_vals()
+        self.compute_intensity_psf(slm_vals=slm_vals)
 
         # -- parallelize across GPUs
         if multi_gpu:
             self.downsample = nn.DataParallel(self.downsample, device_ids=multi_gpu)
-            if self.n_kern is not None or cnn_lite is not None:
+            if self.classifier is not None:
                 # CNN classifier
                 self.classifier = nn.DataParallel(self.classifier, device_ids=multi_gpu)
             elif self.linear_layers is not None:
@@ -658,10 +703,49 @@ class SLMMultiClassLogistic(nn.Module):
                 self.linear1 = nn.DataParallel(self.linear1, device_ids=multi_gpu)
                 if self.linear2:
                     self.linear2 = nn.DataParallel(self.linear2, device_ids=multi_gpu)
-                    self.bn = nn.DataParallel(self.bn, device_ids=multi_gpu)
+                    if self.bn is not None:
+                        self.bn = nn.DataParallel(self.bn, device_ids=multi_gpu)
 
-    @property
-    def psf(self, numpy=False):
+    def get_slm_vals(self):
+        """
+        Apply any pre-processing to learned SLM values, e.g. clamping within [0, 1].
+
+        TODO quantize / use look up table
+        """
+
+        # TRACKING GRADIENT WITH CLAMPING
+        if self.n_slm_mask == 1:
+            # slm_vals = self.slm_vals.sigmoid()
+            slm_vals = self.slm_vals.clamp(min=0, max=1)
+        else:
+            # slm_vals = [self.slm_vals[i].sigmoid() for i in range(self.n_slm_mask)]
+            slm_vals = [self.slm_vals[i].clamp(min=0, max=1) for i in range(self.n_slm_mask)]
+
+        return slm_vals
+
+        # with torch.no_grad():
+        #     if self.n_slm_mask == 1:
+        #         self.slm_vals.clamp_(min=0, max=1)
+        #     else:
+        #         slm_vals = [self.slm_vals[i].clamp_(min=0, max=1) for i in range(self.n_slm_mask)]
+
+        # return self.slm_vals
+
+    def set_slm_vals(self, slm_vals):
+        """
+        d        only works if requires_grad = False
+        """
+
+        np.testing.assert_array_equal(slm_vals.shape, self.slm_vals.shape)
+        self.slm_vals = slm_vals
+
+        # recompute intensity PSF
+        self.compute_intensity_psf()
+
+    def get_psf(self, numpy=False):
+        slm_vals = self.get_slm_vals()
+        self.compute_intensity_psf(slm_vals=slm_vals)
+
         if numpy:
             if self.n_slm_mask == 1:
                 return self._psf.cpu().detach().numpy().squeeze()
@@ -670,16 +754,40 @@ class SLMMultiClassLogistic(nn.Module):
         else:
             return self._psf
 
+    def set_mask2sensor(self, mask2sensor):
+        self.mask2sensor = mask2sensor
+
+        # recompute intensity PSF
+        self.compute_intensity_psf()
+
+    def save_psf(self, fp, bit_depth=8):
+        psf = self.get_psf(numpy=True)
+        psf = np.transpose(psf, (1, 2, 0))
+        psf /= psf.max()
+
+        # save as int
+        psf *= 2**bit_depth - 1
+        if bit_depth <= 8:
+            psf = psf.astype(dtype=np.uint8)
+        else:
+            psf = psf.astype(dtype=np.uint16)
+        cv2.imwrite(fp, cv2.cvtColor(psf, cv2.COLOR_RGB2BGR))
+
     def forward(self, x):
 
         if x.min() < 0:
             warnings.warn("Got negative data. Shift to non-negative.")
             x -= x.min()
 
+        # compute intensity PSF from SLM values
+        slm_vals = self.get_slm_vals()  # apply any (physical) pre-processing
+        self.compute_intensity_psf(slm_vals=slm_vals)
+
         if self.n_slm_mask > 1:
             # add dimension for time-multiplexed measurements
             x = x.unsqueeze(1)
 
+        # convolve with PSF
         x = fftconvolve(x, self._psf, axes=(-2, -1))
 
         if self.n_slm_mask > 1:
@@ -704,8 +812,12 @@ class SLMMultiClassLogistic(nn.Module):
         if self.sensor_activation is not None:
             x = self.sensor_activation(x)
 
+        if self.vgg is not None:
+            # TODO : more elegant approach to make square input to VGG??
+            x = resize(x, size=(32, 32))
+
         # -- digital decision network after sensor
-        if self.n_kern or self.cnn_lite:
+        if self.classifier is not None:
             assert self.n_slm_mask == 1, "Not supported for multiple masks"
             logits = self.classifier(x)
         else:
@@ -717,29 +829,38 @@ class SLMMultiClassLogistic(nn.Module):
                 if self.dropout is not None:
                     x = self.dropout(x)
                 if self.hidden:
-                    x = self.sensor_activation(self.bn(x))
+                    if self.bn is not None:
+                        x = self.bn(x)
+                    x = self.sensor_activation(x)
                     x = self.linear2(x)
             logits = self.decision(x)
         return logits
 
-    def compute_intensity_psf(self):
+    def compute_intensity_psf(self, slm_vals=None):
+
+        if slm_vals is None:
+            slm_vals = self.get_slm_vals()
+
+        assert slm_vals.max() <= 1
+        assert slm_vals.min() >= 0
 
         if self.n_slm_mask == 1:
             # TODO : backward compatability but can make consistent with multiple masks
 
             # -- get SLM mask, i.e. deadspace modeling, quantization (todo), non-linearities (todo), etc
             mask = get_slm_mask(
-                slm_vals=self.slm_vals.to(self.device_mask_creation),
+                slm_vals=slm_vals.to(self.device_mask_creation),
                 slm_config=self.slm_config,
                 sensor_config=self.sensor_config,
                 crop_fact=self.crop_fact,
-                target_dim=self.input_shape,
+                target_dim=self.input_shape[1:],
                 deadspace=self.deadspace,
                 device=self.device_mask_creation,
                 dtype=self.dtype,
                 requires_grad=self.requires_grad,
             )
-            mask = mask.to(self.device)
+            if self.device != self.device_mask_creation:
+                mask = mask.to(self.device)
 
             # apply mask
             u_in = mask * self.spherical_wavefront
@@ -749,7 +870,7 @@ class SLMMultiClassLogistic(nn.Module):
                 # precompute at very start, not dependent on input pattern, just its shape
                 # TODO : benchmark how much it actually saves
                 self._H = torch.zeros(
-                    [self.color_system.n_wavelength] + list(self.input_shape * 2),
+                    [self.color_system.n_wavelength] + list(self.input_shape[1:] * 2),
                     dtype=self.ctype,
                     device=self.device,
                 )
@@ -781,16 +902,20 @@ class SLMMultiClassLogistic(nn.Module):
 
         else:
 
+            assert len(slm_vals) == self.n_slm_mask
+
             # compute masks
-            masks_dim = [self.n_slm_mask, self.color_system.n_wavelength] + list(self.input_shape)
+            masks_dim = [self.n_slm_mask, self.color_system.n_wavelength] + list(
+                self.input_shape[1:]
+            )
             masks = torch.zeros(masks_dim, dtype=self.dtype, device=self.device)
             for i in range(self.n_slm_mask):
                 masks[i] = get_slm_mask(
-                    slm_vals=self.slm_vals[i].to(self.device_mask_creation),
+                    slm_vals=slm_vals[i].to(self.device_mask_creation),
                     slm_config=self.slm_config,
                     sensor_config=self.sensor_config,
                     crop_fact=self.crop_fact,
-                    target_dim=self.input_shape,
+                    target_dim=self.input_shape[1:],
                     deadspace=self.deadspace,
                     device=self.device_mask_creation,
                     dtype=self.dtype,
@@ -805,7 +930,7 @@ class SLMMultiClassLogistic(nn.Module):
                 # precompute at very start, not dependent on input pattern, just its shape
                 # TODO : benchmark how much it actually saves
                 self._H = torch.zeros(
-                    [self.color_system.n_wavelength] + list(self.input_shape * 2),
+                    [self.color_system.n_wavelength] + list(self.input_shape[1:] * 2),
                     dtype=self.ctype,
                     device=self.device,
                 )
@@ -852,6 +977,8 @@ class SLMMultiClassLogistic(nn.Module):
 
         if self.cnn_lite:
             return f"{_name}_CNNLite_{self.cnn_lite}_FCNN{self.hidden}"
+        elif self.vgg:
+            return f"{_name}_{self.vgg}"
         elif self.n_kern:
             return f"{_name}_CNN_{self.n_kern}"
         elif self.hidden:
