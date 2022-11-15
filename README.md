@@ -1,5 +1,7 @@
 # LenslessClassification
 
+Code for the paper "Privacy-Enhancing Optical Embeddings for Lensless Classification".
+
 ## Setup
 ```
 conda create --name lensless_class python=3.9
@@ -12,8 +14,6 @@ For PyTorch, you can check CUDA version with
 nvcc --version
 ```
 And find the appropriate installation command [here](https://pytorch.org/).
-
-Install `waveprop` from source.
 
 ## PSFs
 
@@ -28,15 +28,18 @@ The simulated PSFs (Coded Aperture and Fixed SLM (s)) are already in this folder
 
 In the following bash scripts, the variable `N_FILES` can be used to run approaches on a small set of files. Set it to `0` to run on all files.
 
-The following script can be used to run the experiments of Section 4.1:
+The following script can be used to run the experiments of Section 5.1 (varying embedding dimension):
 ```
 ./mnist_vary_dimension.sh
 ```
 
-The following script can be used to run the experiments of Section 4.2:
+The following script can be used to run the experiments of Section 5.1 (robustness to common image transformations):
 ```
 ./mnist_robustness.sh
 ```
+
+TODO : CelebA and CIFAR10
+
 
 Both bash scripts make use of the two training scripts:
 -  `scripts/train_fixed_encoder.py`: training a fixed encoder (Lens, Coded Aperture, Diffuser, Fixed SLM (m), Fixed SLM (s)).
@@ -44,7 +47,29 @@ Both bash scripts make use of the two training scripts:
 
 ## Simulating example embedddings
 
-TODO
+To simulate and save as PNF embeddings of the different cameras, the following script can be used:
+```
+python scripts/simulate_examples.py --task mnist --n_files 10
+```
+
+Task can be set to `mnist`, `celeba`, or `cifar10`.
+
+Note that some parameters have to be manually set in the script:
+- Dimension of simualated examples.
+- Which cameras to simulate, by specifiying PSF paths for fixed masks and model maths for learned masks.
+
+The same script is used to plot the PSFs of learned masks.
+
+With the `--cam [KEY]` option, a specific camera can be picked.
+
+With the `--recover [N_ITER]` option, a convex optimization approach can be used to recover the underlying image (only for MNIST and CelebA as RGB isn't supported). Not that only MNIST is discernable for (24x32) as the downsampling is too harsh and the content is too complex for other data. With 100 iterations, the digit can be discerned; 500 iterations gives much better quality.
+
+Perturbations can be applied to MNIST as in Section 5.1 (robustness to common image transformations): `--random_shift`, `--random_height`, `--random_rotate`, `--perspective`.
+
+For example, recover diffuser embeddings with heights between 15 and 20 cm:
+```
+python scripts/simulate_examples.py --task mnist --recover 200 --cam diffuser --random_height 15 20
+```
 
 
 ## Defense to attacks experiments

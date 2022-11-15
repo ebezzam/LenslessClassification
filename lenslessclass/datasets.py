@@ -254,7 +254,7 @@ class Propagated:
         magnification = mask2sensor / scene2mask
         self.scene_dim = sensor_size / magnification
 
-        if random_height:
+        if random_height is not None:
             # TODO combine with shifting which needs to know padding
             assert len(random_height) == 2
             assert random_height[0] <= random_height[1]
@@ -307,7 +307,7 @@ class Propagated:
         if random_shift:
 
             assert (
-                random_height is None
+                not random_height
             ), "Random height not supported with random shift, need padding info"
 
             def shift_within_sensor(image):
