@@ -1,3 +1,8 @@
+# Table E.2, third row
+BATCH_SIZE=32
+HIDDEN_VALS=(800)
+SCHED=20
+TRAIN_HYBRID=false
 PSF_FP=(
     'psfs/tape.png' 
     'psfs/adafruit.png' 
@@ -5,18 +10,28 @@ PSF_FP=(
     'psfs/simulated_mls63_mask2sensor0p0005_17052022_18h00_12bit.png'
     'psfs/lens.png'
 )
-TRAIN_HYBRID=true
+
+# # Table E.2, fourth row
+# # -- comment all paths inside `PSF_FP``
+# BATCH_SIZE=64
+# HIDDEN_VALS=(800)
+# SCHED=20
+# TRAIN_HYBRID=true
+# PSF_FP=()
+
+
+# ------------
+
+
 N_FILES=0     # set to 0 to run all files
-USE_MAX_RANGE=false
+USE_MAX_RANGE=true
 
 N_EPOCH=50
-BATCH_SIZE=200
 OBJECT_HEIGHT=0.12
 DOWN_PSF_DEFAULT=8
 SEED=0
-DOWN_ORIG_VALS=(1 16)
-HIDDEN_VALS=(800)
-DATA_DIR="data_robustness"
+DOWN_ORIG_VALS=(1)
+DATA_DIR="data"
 
 if (( $N_FILES > 0 ))
 then
@@ -56,7 +71,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --shift \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
 
                 printf "\n------- RESCALE\n"
                 echo $psf, "down_orig : "$down_orig, "mask2sensor : "$mask2sensor, "down_psf : "$down_psf, "crop_psf : "$crop_psf, "hidden : "$hidden, "batch : "$BATCH_SIZE
@@ -65,7 +80,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --random_height 2 20 \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
 
                 printf "\n------- ROTATE\n"
                 echo $psf, "down_orig : "$down_orig, "mask2sensor : "$mask2sensor, "down_psf : "$down_psf, "crop_psf : "$crop_psf, "hidden : "$hidden, "batch : "$BATCH_SIZE
@@ -74,7 +89,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --rotate 90 \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
 
                 printf "\n------- PERSPECTIVE\n"
                 echo $psf, "down_orig : "$down_orig, "mask2sensor : "$mask2sensor, "down_psf : "$down_psf, "crop_psf : "$crop_psf, "hidden : "$hidden, "batch : "$BATCH_SIZE
@@ -83,7 +98,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --perspective 0.5 \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
 
 
             done
@@ -99,7 +114,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --shift \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
 
                 printf "\n------- RESCALE\n"
 
@@ -107,7 +122,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --random_height 2 20 \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
 
                 printf "\n------- ROTATE\n"
 
@@ -115,7 +130,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --rotate 90 \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
 
                 printf "\n------- PERSPECTIVE\n"
 
@@ -123,7 +138,7 @@ if [ "$USE_MAX_RANGE" = true ] ; then
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --perspective 0.5 \
-                --output_dir $DATA_DIR --use_max_range
+                --output_dir $DATA_DIR --use_max_range --sched $SCHED
             fi
 
         done
@@ -161,7 +176,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --shift \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
 
                 printf "\n------- RESCALE\n"
                 echo $psf, "down_orig : "$down_orig, "mask2sensor : "$mask2sensor, "down_psf : "$down_psf, "crop_psf : "$crop_psf, "hidden : "$hidden, "batch : "$BATCH_SIZE
@@ -170,7 +185,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --random_height 2 20 \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
 
                 printf "\n------- ROTATE\n"
                 echo $psf, "down_orig : "$down_orig, "mask2sensor : "$mask2sensor, "down_psf : "$down_psf, "crop_psf : "$crop_psf, "hidden : "$hidden, "batch : "$BATCH_SIZE
@@ -179,7 +194,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --rotate 90 \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
 
                 printf "\n------- PERSPECTIVE\n"
                 echo $psf, "down_orig : "$down_orig, "mask2sensor : "$mask2sensor, "down_psf : "$down_psf, "crop_psf : "$crop_psf, "hidden : "$hidden, "batch : "$BATCH_SIZE
@@ -188,7 +203,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --perspective 0.5 \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
 
 
             done
@@ -204,7 +219,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --shift \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
 
                 printf "\n------- RESCALE\n"
 
@@ -212,7 +227,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --random_height 2 20 \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
 
                 printf "\n------- ROTATE\n"
 
@@ -220,7 +235,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --rotate 90 \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
 
                 printf "\n------- PERSPECTIVE\n"
 
@@ -228,7 +243,7 @@ else
                 --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
                 --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --hidden $hidden \
                 --down_psf $down_psf --device cuda:0 --n_files $N_FILES --perspective 0.5 \
-                --output_dir $DATA_DIR
+                --output_dir $DATA_DIR --sched $SCHED
             fi
 
         done

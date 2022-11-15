@@ -26,9 +26,9 @@ The simulated PSFs (Coded Aperture and Fixed SLM (s)) are already in this folder
 
 ## End-to-end training
 
-In the following bash scripts, the variable `N_FILES` can be used to run approaches on a small set of files. Set it to `0` to run on all files.
+In the following bash scripts, the variable `N_FILES` can be used to run approaches on a small set of files. Set it to `0` to run on all files. *Note that different section need to commented/uncommented as we use different hyperparameters depending on the camera.*
 
-The following script can be used to run the experiments of Section 5.1 (varying embedding dimension):
+The following script can be used to run the experiments of Section 5.1 (varying embedding dimension). 
 ```
 ./mnist_vary_dimension.sh
 ```
@@ -38,12 +38,22 @@ The following script can be used to run the experiments of Section 5.1 (robustne
 ./mnist_robustness.sh
 ```
 
-TODO : CelebA and CIFAR10
+The following script can be used to run the experiments of Section 5.2 (Face attribute classification with CelebA):
+```
+./celeba_gender_vary_dimension.sh
+./celeba_smiling_vary_dimension.sh
+```
 
+The following script can be used to run the experiments of Section 5.3 (RGB object classification with CIFAR10):
+```
+./cifar10_vary_dimension.sh
+```
 
-Both bash scripts make use of the two training scripts:
+All bash scripts make use of the two training scripts:
 -  `scripts/train_fixed_encoder.py`: training a fixed encoder (Lens, Coded Aperture, Diffuser, Fixed SLM (m), Fixed SLM (s)).
 -  `scripts/train_hybrid.py`: jointly training SLM with the classifier.
+
+These Python scripts can also be called with user-defined parameters.
 
 ## Simulating example embedddings
 
