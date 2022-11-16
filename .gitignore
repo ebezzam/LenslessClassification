@@ -6,6 +6,7 @@ models/*
 MNIST*
 CelebA*
 celeba*
+notebooks/*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

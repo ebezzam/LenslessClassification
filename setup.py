@@ -18,5 +18,13 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.7",
-    install_requires=["click", "lensless"],
+    install_requires=[
+        "click",
+        "lensless",
+        "waveprop",
+        "scikit-learn",
+        "tqdm",
+        "rawpy",
+        "scikit-image",
+    ],
 )

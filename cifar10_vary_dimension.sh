@@ -1,4 +1,4 @@
-# VGG11 used by all models
+# VGG11 used by all models, RGB, SGD 0.01
 
 # Table H.5, first row
 TRAIN_HYBRID=false
@@ -69,9 +69,9 @@ do
 
 
         python scripts/train_fixed_encoder.py --down_orig ${DOWN_ORIG_VALS[$i]} ${OUTPUT_DIM_VALS_2[$i]} --psf $psf \
-        --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT \
+        --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti sgd --lr 0.01 --object_height $OBJECT_HEIGHT \
         --mask2sensor $mask2sensor --noise_type poisson --seed $SEED  --aug_pad ${PAD_VALS[$i]} \
-        --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --vgg VGG11 \
+        --down_psf $down_psf --device cuda:0 --crop_psf $crop_psf --n_files $N_FILES --vgg VGG11 --rgb \
         --output_dir $DATA_DIR --use_max_range --sched $SCHED --task cifar10 --scene2mask $SCENE_TO_MASK
 
     done
@@ -84,10 +84,10 @@ do
         echo "hybrid", "down_orig : "${DOWN_ORIG_VALS[$i]}, "mask2sensor : "$mask2sensor, "down_psf : "$down_psf, "crop_psf : "$crop_psf, "batch : "$BATCH_SIZE
 
         python scripts/train_hybrid.py --down_orig ${DOWN_ORIG_VALS[$i]} --sensor_act relu --crop_fact 0.8 \
-        --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti adam --object_height $OBJECT_HEIGHT --vgg VGG11 \
+        --batch_size $BATCH_SIZE --n_epoch $N_EPOCH --opti sgd --lr 0.01 --object_height $OBJECT_HEIGHT --vgg VGG11 \
         --mask2sensor $mask2sensor --noise_type poisson --seed $SEED --aug_pad ${PAD_VALS[$i]} \
         --down_psf $down_psf --device cuda:0 --n_files $N_FILES --output_dir $DATA_DIR --use_max_range \
-        --sched $SCHED --task cifar10 --scene2mask $SCENE_TO_MASK
+        --sched $SCHED --task cifar10 --scene2mask $SCENE_TO_MASK --rgb
     fi
 
 done
