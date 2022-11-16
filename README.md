@@ -122,11 +122,11 @@ Note that trained generators are specified in the script.
 
 In the `notebooks` folder:
 
-- `compare_mnist.ipynb`: compare performance of different cameras, architectures, dimensions on handwritten digit classification (MNIST).
-- `compare_celeba.ipynb`: compare performance of different cameras and dimensions on face attribute classification (CelebA).
-- `compare_cifar10.ipynb`: compare performance of different cameras and dimensions on face attribute classification (CelebA).
-- `convex_optimization_attack.ipynb`: visualize examples of convex optimization-based attack.
-- `plaintext_generator.ipynb`: compare performance when varying number of plaintext attacks and number of varying masks.
+- `1_mnist.ipynb`: compare performance of different cameras, architectures, dimensions on handwritten digit classification (MNIST).
+- `2_celeba.ipynb`: compare performance of different cameras and dimensions on face attribute classification (CelebA).
+- `3_cifar10.ipynb`: compare performance of different cameras and dimensions on face attribute classification (CelebA).
+- `4_convex_optimization_attack.ipynb`: visualize examples of convex optimization-based attack.
+- `5_plaintext_generator.ipynb`: compare performance when varying number of plaintext attacks and number of varying masks.
 
 TODO:
 - making MLS mask -> convert as script
