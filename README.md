@@ -128,7 +128,10 @@ In the `notebooks` folder:
 - `4_convex_optimization_attack.ipynb`: visualize examples of convex optimization-based attack.
 - `5_plaintext_generator.ipynb`: compare performance when varying number of plaintext attacks and number of varying masks.
 
-TODO:
+Additional notebooks:
+- `simulate_coded_aperture_psf.ipynb` generating coded aperture mask and PSF as in FlatCam paper.
+
+
 - making MLS mask -> convert as script
 - exploring MNIST / celeba datasets?
 
