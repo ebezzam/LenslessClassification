@@ -131,7 +131,7 @@ In the `notebooks` folder:
 
 - [`1_mnist.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/1_mnist.ipynb): compare performance of different cameras, architectures, dimensions on handwritten digit classification (MNIST).
 - [`2_celeba.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/2_celeba.ipynb): compare performance of different cameras and dimensions on face attribute classification (CelebA).
-- [`3_cifar10.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/3_cifar10.ipynb): compare performance of different cameras and dimensions on face attribute classification (CelebA).
+- [`3_cifar10.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/3_cifar10.ipynb): compare performance of different cameras and dimensions on RGB object classification (CIFAR10).
 - [`4_convex_optimization_attack.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/4_convex_optimization_attack.ipynb): visualize examples of convex optimization-based attack.
 - [`5_plaintext_generator.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/5_plaintext_generator.ipynb): compare performance when varying number of plaintext attacks and number of varying masks.
 
