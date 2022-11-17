@@ -19,9 +19,9 @@ And find the appropriate installation command [here](https://pytorch.org/).
 
 All fixed PSFs can be found in `psfs`.
 
-The simulated PSFs (Coded Aperture and Fixed SLM (s)) are already in this folder. New ones can be simulated as specified below:
-- Coded Aperture: `notebooks/mls_mask.ipynb`
-- Fixed SLM (s): `save_simulated_psf.py`
+The simulated PSFs (Coded aperture and Fixed mask (s)) are already in this folder. New ones can be simulated in the following notebook:
+- Coded aperture: `notebook/simulate_coded_aperture_psf.ipynb` for generating coded aperture mask and PSF as in FlatCam paper.
+- Fixed mask (s): `notebooks/simulate_fixed_mask_psf.ipynb` for generating mask and simulated PSF for proposed system.
 
 
 ## End-to-end training
@@ -50,8 +50,8 @@ The following script can be used to run the experiments of Section 5.3 (RGB obje
 ```
 
 All bash scripts make use of the two training scripts:
--  `scripts/train_fixed_encoder.py`: training a fixed encoder (Lens, Coded Aperture, Diffuser, Fixed SLM (m), Fixed SLM (s)).
--  `scripts/train_hybrid.py`: jointly training SLM with the classifier.
+-  `scripts/train_fixed_encoder.py`: training a fixed encoder (Lens, Coded Aperture, Diffuser, Fixed mask (m), Fixed mask (s)).
+-  `scripts/train_hybrid.py`: jointly learning mask with the classifier.
 
 These Python scripts can also be called with user-defined parameters.
 
@@ -94,7 +94,7 @@ python scripts/convex_optimization_attack.py \
 # with random mask
 python scripts/convex_optimization_attack.py \
 --output_dim 384 512 \
---n_files 50 --diff_slm
+--n_files 50 --diff_mask
 ```
 
 For the generator-based attack, first a dataset from the multiple masks needs to be generated. For example, to generate a dataset from 10 learned PSFs:
@@ -127,12 +127,5 @@ In the `notebooks` folder:
 - `3_cifar10.ipynb`: compare performance of different cameras and dimensions on face attribute classification (CelebA).
 - `4_convex_optimization_attack.ipynb`: visualize examples of convex optimization-based attack.
 - `5_plaintext_generator.ipynb`: compare performance when varying number of plaintext attacks and number of varying masks.
-
-Additional notebooks:
-- `simulate_coded_aperture_psf.ipynb` generating coded aperture mask and PSF as in FlatCam paper.
-
-
-- making MLS mask -> convert as script
-- exploring MNIST / celeba datasets?
 
 
