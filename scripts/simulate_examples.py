@@ -61,52 +61,64 @@ learned_mnist = {
     "learned_mask_lr_768": {
         "model": "MNIST_no_psf_down8_height0.12_NORM_outdim768_50epoch_schedNone_batch100_seed0_SLM_MultiClassLogistic_poisson40.0_DSresize_08112022_12h21",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_lr_192": {
         "model": "MNIST_no_psf_down8_height0.12_outdim192_50epoch_batch100_seed0_SLM_MultiClassLogistic_poisson40.0_DSresize_19102022_06h23",
         "output_dim_vals": [(12, 16)],
+        "single_psf": False,
     },
     "learned_mask_lr_48": {
         "model": "MNIST_no_psf_down8_height0.12_outdim48_50epoch_batch100_seed0_SLM_MultiClassLogistic_poisson40.0_DSresize_19102022_06h24",
         "output_dim_vals": [(6, 8)],
+        "single_psf": False,
     },
     "learned_mask_lr_12": {
         "model": "MNIST_no_psf_down8_height0.12_outdim12_50epoch_batch100_seed0_SLM_MultiClassLogistic_poisson40.0_DSresize_18102022_20h40",
         "output_dim_vals": [(3, 4)],
+        "single_psf": False,
     },
     # - fcnn
     "learned_mask_fcnn_768": {
         "model": "MNIST_no_psf_down8_height0.12_NORM_outdim768_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_03112022_14h01",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_fcnn_192": {
         "model": "MNIST_no_psf_down8_height0.12_NORM_outdim192_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_03112022_18h09",
         "output_dim_vals": [(12, 16)],
+        "single_psf": False,
     },
     "learned_mask_fcnn_48": {
         "model": "MNIST_no_psf_down8_height0.12_NORM_outdim48_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_03112022_23h21",
         "output_dim_vals": [(6, 8)],
+        "single_psf": False,
     },
     "learned_mask_fcnn_12": {
         "model": "MNIST_no_psf_down8_height0.12_NORM_outdim12_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_04112022_04h12",
         "output_dim_vals": [(3, 4)],
+        "single_psf": False,
     },
     # - perturb
     "learned_mask_shift": {
         "model": "MNIST_no_psf_down8_height0.12_RandomShift_outdim768_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_04112022_11h18",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_rescale": {
         "model": "MNIST_no_psf_down8_height0.02-0.2_outdim768_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_04112022_16h29",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_rotate": {
         "model": "MNIST_no_psf_down8_height0.12_RandomRotate90.0_outdim768_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_04112022_21h25",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_perspective": {
         "model": "MNIST_no_psf_down8_height0.12_RandomPerspective0.5_outdim768_50epoch_sched20_batch64_seed0_SLM_SingleHidden800_poisson40.0_DSresize_05112022_01h58",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
 }
 
@@ -115,60 +127,74 @@ learned_celeba = {
     "learned_mask_gender_768": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_50epoch_seed0_SLM_SingleHidden800_poisson40.0_21102022_17h11",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_12": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim12_Male_50epoch_seed0_SLM_SingleHidden800_poisson40.0_21102022_17h22",
         "output_dim_vals": [(3, 4)],
+        "single_psf": False,
     },
     # -- Smiling
     "learned_mask_smiling_768": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Smiling_50epoch_seed0_SLM_SingleHidden800_poisson40.0_22102022_07h16",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_smiling_12": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim12_Smiling_50epoch_seed0_SLM_SingleHidden800_poisson40.0_22102022_13h55",
         "output_dim_vals": [(3, 4)],
+        "single_psf": False,
     },
     # - 10 seeds
     "learned_mask_gender_0": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed0_SLM_SingleHidden800_poisson40.0_22102022_16h24",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_1": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed1_SLM_SingleHidden800_poisson40.0_22102022_20h35",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_2": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed2_SLM_SingleHidden800_poisson40.0_22102022_23h35",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_3": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed3_SLM_SingleHidden800_poisson40.0_23102022_02h33",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_4": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed4_SLM_SingleHidden800_poisson40.0_23102022_05h36",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_5": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed5_SLM_SingleHidden800_poisson40.0_23102022_08h36",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_6": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed6_SLM_SingleHidden800_poisson40.0_23102022_12h11",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_7": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed7_SLM_SingleHidden800_poisson40.0_23102022_15h33",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_8": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed8_SLM_SingleHidden800_poisson40.0_23102022_19h11",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
     "learned_mask_gender_9": {
         "model": "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed9_SLM_SingleHidden800_poisson40.0_23102022_23h59",
         "output_dim_vals": [(24, 32)],
+        "single_psf": False,
     },
 }
 
@@ -238,15 +264,21 @@ learned_cifar10 = {
     type=float,
     help="Whether to apply perspective distortions. 0.5 is used in experiments.",
 )
+@click.option(
+    "--model_root",
+    type=str,
+    default="models",
+    help="Where to load models from.",
+)
 def simulate_examples(
-    task, n_files, recover, cam, random_shift, perspective, random_height, random_rotate
+    task, n_files, recover, cam, random_shift, perspective, random_height, random_rotate, model_root
 ):
     if random_height is not None:
         random_height = np.array(random_height) * 1e-2
         object_height = None
 
-    task = task.upper()
-    if task == "MNIST":
+    task = task.lower()
+    if task == "mnist":
         root = "data"
         dataset_object = MNISTPropagated
         n_class = 10
@@ -258,7 +290,7 @@ def simulate_examples(
 
         psf_dict.update(learned_mnist)
 
-    elif task == "CELEBA":
+    elif task == "celeba":
         root = "/scratch"
         dataset_object = CelebAPropagated
         n_class = 1
@@ -270,7 +302,7 @@ def simulate_examples(
 
         psf_dict.update(learned_celeba)
 
-    elif task == "CIFAR10":
+    elif task == "cifar10":
         root = "data"
         dataset_object = CIFAR10Propagated
         n_class = 10
@@ -310,7 +342,8 @@ def simulate_examples(
             print("-- learned PSF...")
 
             # opening JSON file
-            model_dir = plib.Path(psf_dict[_psf]["model"])
+            model_dir = task / plib.Path(psf_dict[_psf]["model"])
+            model_dir = model_root / model_dir
             f = open(str(model_dir / "metadata.json"))
             metadata = json.load(f)
 

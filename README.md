@@ -22,6 +22,8 @@ nvcc --version
 ```
 And find the appropriate installation command [here](https://pytorch.org/).
 
+**Put `model` and `data` directories at the repository root!**
+
 ## PSFs <a name="psfs"></a>
 
 All fixed PSFs can be found in `psfs`.

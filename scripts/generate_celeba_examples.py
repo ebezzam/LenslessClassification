@@ -10,6 +10,7 @@ import json
 from pprint import pprint
 from torch.utils.data import Subset
 from lenslessclass.util import device_checks
+from lenslessclass.model_dict import model_dict
 from PIL import Image
 import os
 
@@ -20,58 +21,15 @@ device = "cuda:1"
 IDX = np.arange(0, 1)  # image to save
 output_dir = "saved_images/celeba_decoder"
 MODEL_DIR = "models/celeba_decoders"
+DATA_DIR = "data"  # to overwrite parent directory in metadata of model
 
+models = model_dict["celeba_decoder"]
 
-models = {
-    "fixed": {
-        100: plib.Path(
-            "celeba_1_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch4_schedNone_seed0_Conv3_10000_l1_100trainfiles_27102022_14h22"
-        ),
-        1000: plib.Path(
-            "celeba_1_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch16_schedNone_seed0_Conv3_10000_l1_1000trainfiles_27102022_19h54"
-        ),
-        10000: plib.Path(
-            "celeba_1_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch32_schedNone_seed0_Conv3_10000_l1_10000trainfiles_27102022_13h46"
-        ),
-        100000: plib.Path(
-            "celeba_1_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch32_schedNone_seed0_Conv3_10000_l1_100000trainfiles_26102022_09h41"
-        ),
-    },
-    "10": {
-        100: plib.Path(
-            "celeba_10_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch4_schedNone_seed0_Conv3_10000_l1_100trainfiles_27102022_21h17"
-        ),
-        1000: plib.Path(
-            "celeba_10_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch16_schedNone_seed0_Conv3_10000_l1_1000trainfiles_27102022_21h37"
-        ),
-        10000: plib.Path(
-            "celeba_10_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch32_schedNone_seed0_Conv3_10000_l1_10000trainfiles_27102022_22h23"
-        ),
-        100000: plib.Path(
-            "celeba_10_learned_mixed_mask_out768_offset100000_nfiles100000_50epoch_batch32_schedNone_seed0_Conv3_10000_l1_100000trainfiles_26102022_17h16"
-        ),
-    },
-    "100": {
-        100: plib.Path(
-            "celeba_100_random_mixed_mask_nonlinTrue_out768_offset100000_nfiles100000_50epoch_batch4_schedNone_seed0_Conv3_10000_l1_100trainfiles_28102022_01h54"
-        ),
-        1000: plib.Path(
-            "celeba_100_random_mixed_mask_nonlinTrue_out768_offset100000_nfiles100000_50epoch_batch16_schedNone_seed0_Conv3_10000_l1_1000trainfiles_28102022_02h09"
-        ),
-        10000: plib.Path(
-            "celeba_100_random_mixed_mask_nonlinTrue_out768_offset100000_nfiles100000_50epoch_batch32_schedNone_seed0_Conv3_10000_l1_10000trainfiles_28102022_02h33"
-        ),
-        100000: plib.Path(
-            "celeba_100_random_mixed_mask_nonlinTrue_out768_offset100000_nfiles100000_50epoch_batch32_schedNone_seed0_Conv3_10000_l1_100000trainfiles_27102022_19h46"
-        ),
-    },
-}
+for n_attack in models.keys():
 
-for n_mask in models.keys():
+    for n_mask in models[n_attack].keys():
 
-    for n_attack in models[n_mask].keys():
-
-        model_dir = MODEL_DIR / models[n_mask][n_attack]
+        model_dir = MODEL_DIR / plib.Path(models[n_attack][n_mask])
         print("\n--------------")
         print(model_dir)
         print("--------------\n")
@@ -90,8 +48,11 @@ for n_mask in models.keys():
                 transforms.Normalize(metadata["dataset"]["mean"], metadata["dataset"]["std"]),
             ]
         )
+
+        _path = DATA_DIR / plib.Path(os.path.basename(metadata["dataset"]["path"]))
+
         all_data = CelebAAugmented(
-            path=metadata["dataset"]["path"],
+            path=_path,
             transform=trans,
             return_original=root,
             target_dim=metadata["target_dim"],

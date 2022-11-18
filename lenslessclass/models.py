@@ -617,8 +617,8 @@ class SLMMultiClassLogistic(nn.Module):
 
         # -- initialize SLM values, set as parameter to optimize
         # TODO : need to make internal changes to get_slm_mask for no deadspace
-        # rand_func = torch.rand
-        rand_func = torch.randn
+        rand_func = torch.rand  # between [0, 1]
+        # rand_func = torch.randn
         if deadspace:
             if self.n_slm_mask == 1:
                 self.slm_vals = rand_func(
@@ -716,7 +716,7 @@ class SLMMultiClassLogistic(nn.Module):
         # TRACKING GRADIENT WITH CLAMPING
         if self.n_slm_mask == 1:
             # slm_vals = self.slm_vals.sigmoid()
-            slm_vals = self.slm_vals.clamp(min=0, max=1)
+            slm_vals = self.slm_vals.clamp(min=0, max=1)  # found clamp to be better
         else:
             # slm_vals = [self.slm_vals[i].sigmoid() for i in range(self.n_slm_mask)]
             slm_vals = [self.slm_vals[i].clamp(min=0, max=1) for i in range(self.n_slm_mask)]
@@ -733,7 +733,7 @@ class SLMMultiClassLogistic(nn.Module):
 
     def set_slm_vals(self, slm_vals):
         """
-        d        only works if requires_grad = False
+        only works if requires_grad = False
         """
 
         np.testing.assert_array_equal(slm_vals.shape, self.slm_vals.shape)

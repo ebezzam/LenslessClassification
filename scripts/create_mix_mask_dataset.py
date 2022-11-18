@@ -14,52 +14,12 @@ import cv2
 from PIL import Image
 from waveprop.devices import slm_dict, sensor_dict, SensorParam
 import click
+from lenslessclass.model_dict import model_dict
 
 
-# if using learned PSF, set random_masks to None and specify this dict
-ROOT_DIR = "models/celeba"
-model_paths = [
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed0_SLM_SingleHidden800_poisson40.0_22102022_16h24"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed1_SLM_SingleHidden800_poisson40.0_22102022_20h35"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed2_SLM_SingleHidden800_poisson40.0_22102022_23h35"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed3_SLM_SingleHidden800_poisson40.0_23102022_02h33"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed4_SLM_SingleHidden800_poisson40.0_23102022_05h36"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed5_SLM_SingleHidden800_poisson40.0_23102022_08h36"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed6_SLM_SingleHidden800_poisson40.0_23102022_12h11"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed7_SLM_SingleHidden800_poisson40.0_23102022_15h33"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed8_SLM_SingleHidden800_poisson40.0_23102022_19h11"
-    ),
-    ROOT_DIR
-    / plib.Path(
-        "celeba_no_psf_down8_height0.27_NORM_100000files_scene2mask0.55_outdim768_Male_25epoch_seed9_SLM_SingleHidden800_poisson40.0_23102022_23h59"
-    ),
-]
+# hardcoded for CelebA gender models
+MODEL_DIR = "models/celeba"
+models = model_dict["Gender"]["Learned mask"]["FCNN"]["24x32_multi"]
 
 
 @click.command()
@@ -81,7 +41,6 @@ def create_dataset(n_mask, learned, output_dir, n_files):
 
     OFFSET = 100000  # don't overlap with files used for training / testing
     print_progress = 1000
-    rgb = False
     CELEBA_DIR = "/scratch"
     PSF_OUTPUT_DIR = "psfs"
     output_dim = [24, 32]
@@ -191,9 +150,10 @@ def create_dataset(n_mask, learned, output_dir, n_files):
         # use learned masks
         print("Loading learned PSFs...")
 
-        assert len(model_paths) >= n_mask, "Not enough learned masks."
+        assert len(models.keys()) >= n_mask, "Not enough learned masks."
 
-        for _path in model_paths[:n_mask]:
+        for _seed in list(models.keys())[:n_mask]:
+            _path = MODEL_DIR / plib.Path(models[_seed])
             print(_path)
             f = open(str(_path / "metadata.json"))
             metadata = json.load(f)
