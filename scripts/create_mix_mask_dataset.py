@@ -4,6 +4,7 @@ import torch
 import random
 import torch.nn as nn
 from lenslessclass.models import SLMMultiClassLogistic
+from lenslessclass.datasets import CelebAPropagated
 import json
 import time
 import pandas as pd
@@ -16,7 +17,7 @@ import click
 
 
 # if using learned PSF, set random_masks to None and specify this dict
-ROOT_DIR = ""
+ROOT_DIR = "models/celeba"
 model_paths = [
     ROOT_DIR
     / plib.Path(
@@ -68,11 +69,17 @@ model_paths = [
     type=int,
     help="Number of random masks to alternate between.",
 )
+@click.option("--output_dir", type=str, default="data", help="Path to save mixed mask dataset.")
 @click.option("--learned", is_flag=True, help="Use learned masks.")
-def create_dataset(n_mask, learned):
+@click.option(
+    "--n_files",
+    default=100000,
+    type=int,
+    help="Number of files to simulate.",
+)
+def create_dataset(n_mask, learned, output_dir, n_files):
 
     OFFSET = 100000  # don't overlap with files used for training / testing
-    N_FILES = 100000
     print_progress = 1000
     rgb = False
     CELEBA_DIR = "/scratch"
@@ -252,10 +259,10 @@ def create_dataset(n_mask, learned):
 
     ## INITIALIZE OUTPUT FOLDER
     if not learned:
-        output_dir = f"celeba_{len(psfs)}_random_mixed_mask_nonlin{non_lin}_out{np.prod(output_dim)}_offset{OFFSET}_nfiles{N_FILES}"
+        folder_name = f"celeba_{len(psfs)}_random_mixed_mask_nonlin{non_lin}_out{np.prod(output_dim)}_offset{OFFSET}_nfiles{n_files}"
     else:
-        output_dir = f"celeba_{len(psfs)}_learned_mixed_mask_out{np.prod(output_dim)}_offset{OFFSET}_nfiles{N_FILES}"
-    output_dir = plib.Path(output_dir)
+        folder_name = f"celeba_{len(psfs)}_learned_mixed_mask_out{np.prod(output_dim)}_offset{OFFSET}_nfiles{n_files}"
+    output_dir = output_dir / plib.Path(folder_name)
     if not os.path.isdir(output_dir):
         output_dir.mkdir(exist_ok=True)
         print("\nSimulated dataset will be saved to :", output_dir)
@@ -271,7 +278,7 @@ def create_dataset(n_mask, learned):
         "sensor": sensor,
         "object_height": object_height,
         "offset": OFFSET,
-        "n_files": N_FILES,
+        "n_files": n_files,
         "device_conv": device_conv,
         "crop_psf": False,
         "grayscale": grayscale,
@@ -340,14 +347,14 @@ def create_dataset(n_mask, learned):
 
         if i % print_progress == (print_progress - 1):
             proc_time = time.time() - start_time
-            print(f"{i + 1 - OFFSET} / {N_FILES} examples, {proc_time / 60} minutes")
+            print(f"{i + 1 - OFFSET} / {n_files} examples, {proc_time / 60} minutes")
 
     start_time = time.time()
 
     for i in range(OFFSET, OFFSET + n_complete):
         label_fp = train_output / f"label{i}"
         train_labels.append(torch.load(label_fp))
-    for i in range(OFFSET + n_complete, OFFSET + N_FILES):
+    for i in range(OFFSET + n_complete, OFFSET + n_files):
         _simulate(i)
 
     with open(train_output / "labels.txt", "w") as f:

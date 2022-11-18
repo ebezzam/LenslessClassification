@@ -31,9 +31,9 @@ from lenslessclass.util import lenless_recovery
     type=int,
     help="Output dimension (height, width).",
 )
-@click.option("--diff_slm", is_flag=True, help="Different SLM values at recovery.")
+@click.option("--diff_mask", is_flag=True, help="Different mask values at recovery.")
 @click.option("--diff_dist", is_flag=True, help="Different mask to sensor distance at recovery.")
-@click.option("--no_slm_sim", is_flag=True, help="Use SLM values directly as PSF.")
+@click.option("--no_mask_sim", is_flag=True, help="Use mask values directly as PSF.")
 @click.option(
     "--mask_based",
     is_flag=True,
@@ -80,12 +80,13 @@ from lenslessclass.util import lenless_recovery
     default=None,
     help="If provided, add TV norm prior (smooth gradients) with as lambda.",
 )
+@click.option("--output_dir", type=str, default="data", help="Path to save recovered dataset.")
 def cvx_recovery(
     output_dim,
     n_files,
-    diff_slm,
+    diff_mask,
     diff_dist,
-    no_slm_sim,
+    no_mask_sim,
     mask_based,
     n_jobs,
     scene2mask,
@@ -94,6 +95,7 @@ def cvx_recovery(
     tv,
     min_iter,
     max_iter,
+    output_dir,
 ):
     assert output_dim is not None
 
@@ -103,6 +105,8 @@ def cvx_recovery(
     # mask2sensor = 4e-3, scene2mask = 55e-2, object_height = 0.27
     roi = [[95, 290], [175, 335]]
     # roi = [[0, -1], [0, -1]]   # whole image
+    if scene2mask != 55e-2:
+        raise ValueError("determine different ROI with the notebook!")
 
     if diff_dist:
         # mask to sensor distance
@@ -117,7 +121,7 @@ def cvx_recovery(
 
     # simulation parameters
     # output_dim = tuple(np.array([24, 32]) * 8)
-    slm = "adafruit"
+    mask = "adafruit"
     device_mask_creation = "cpu"
     sensor = "rpi_hq"
     mask2sensor = 4e-3
@@ -145,7 +149,7 @@ def cvx_recovery(
     # create a random PSF
     model = SLMMultiClassLogistic(
         input_shape=sensor_size,
-        slm_config=slm_dict[slm],
+        slm_config=slm_dict[mask],
         sensor_config=sensor_param,
         crop_fact=0.8,
         device=device,
@@ -167,27 +171,27 @@ def cvx_recovery(
 
     """ Low-dimension recovery  """
     output_dir_lowres = f"celeba_recovered_scene2mask{scene2mask}_height{object_height}_{output_dim[0]}x{output_dim[1]}"
-    if diff_slm:
+    if diff_mask:
         output_dir_lowres += "_diff_slm"
     if diff_dist:
         output_dir_lowres += "_diff_dist"
-    if no_slm_sim:
+    if no_mask_sim:
         output_dir_lowres += "_no_slm_sim"
     if mask_based:
         output_dir_lowres += "_mask_based"
     if tv:
         output_dir_lowres += f"_tv{tv}"
-    output_dir_lowres = plib.Path(output_dir_lowres)
+    output_dir_lowres = output_dir / plib.Path(output_dir_lowres)
 
     if os.path.isdir(output_dir_lowres):
 
-        print(f"\nLow resolution dataset already exists : {output_dir_lowres}")
+        print(f"\nRecovered dataset already exists : {output_dir_lowres}")
         n_files_complete = len(glob.glob(os.path.join(output_dir_lowres, "*.png")))
         print(f"-- {n_files_complete} files complete")
 
     else:
         output_dir_lowres.mkdir(exist_ok=True)
-        print("\nLow resolution dataset will be saved to :", output_dir_lowres)
+        print("\nRecovered dataset will be saved to :", output_dir_lowres)
         n_files_complete = 0
 
     if n_files_complete < n_files:
@@ -212,7 +216,7 @@ def cvx_recovery(
         )
 
         mask = None
-        if no_slm_sim:
+        if no_mask_sim:
             psf_shape = tuple(model._psf.shape[1:])
             psf = model.slm_vals.cpu().numpy()
             psf = zero_pad(psf)
@@ -224,8 +228,8 @@ def cvx_recovery(
             cv2.imwrite(fp, cv2.cvtColor(psf_8bit, cv2.COLOR_RGB2BGR))
 
         def recover(i, psf, model, grayscale, ds_aug, min_iter, mask, dist_range, tv, max_iter):
-            if diff_slm:
-                # set new SLM values and recompute PSF
+            if diff_mask:
+                # set new mask values and recompute PSF
                 model.set_slm_vals(torch.rand(model.slm_vals.shape))
                 psf_fp = os.path.join(PSF_OUTPUT_DIR, f"diff_12bit.png")
                 model.save_psf(fp=psf_fp, bit_depth=12)
