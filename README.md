@@ -91,6 +91,8 @@ python scripts/simulate_examples.py --task mnist --recover 200 --cam diffuser --
 
 ## Defense to adversarial attacks <a name="defense"></a>
 
+#### Convex optimization-based
+
 For convex optimization-based attack, the following command will apply the attack to a set of CelebA files (defined by command line):
 ```
 # with knowledge of the mask
@@ -108,6 +110,8 @@ The following bash script can be used to reproduce the results in the paper (Tab
 ```
 ./convex_opt_attack.sh
 ```
+
+#### Training a decoder
 
 For the generator-based attack, first a dataset from the multiple masks needs to be generated. For example, to generate a dataset from 10 learned PSFs:
 ```
