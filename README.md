@@ -47,7 +47,7 @@ The following script can be used to run the experiments of Section 5.1 (robustne
 ./mnist_robustness.sh
 ```
 
-The following script can be used to run the experiments of Section 5.2 (Face attribute classification with CelebA):
+The following scripts can be used to run the experiments of Section 5.2 (Face attribute classification with CelebA):
 ```
 ./celeba_gender_vary_dimension.sh
 ./celeba_smiling_vary_dimension.sh
@@ -62,11 +62,11 @@ All bash scripts make use of the two training scripts:
 -  `scripts/train_fixed_encoder.py`: training a fixed encoder (Lens, Coded Aperture, Diffuser, Fixed mask (m), Fixed mask (s)).
 -  `scripts/train_hybrid.py`: jointly learning mask with the classifier.
 
-These Python scripts can also be called with user-defined parameters.
+These Python scripts are called with user-defined parameters that need to be set accordingly for each experiment.
 
 ## Simulating example embedddings <a name="examples"></a>
 
-To simulate and save as PNF embeddings of the different cameras, the following script can be used:
+To simulate and save as PNG embeddings of the different cameras, the following script can be used:
 ```
 python scripts/simulate_examples.py --task mnist --n_files 10
 ```
@@ -81,11 +81,11 @@ The same script is used to plot the PSFs of learned masks.
 
 With the `--cam [KEY]` option, a specific camera can be picked.
 
-With the `--recover [N_ITER]` option, a convex optimization approach can be used to recover the underlying image (only for MNIST and CelebA as RGB isn't supported). Not that only MNIST is discernable for (24x32) as the downsampling is too harsh and the content is too complex for other data. With 100 iterations, the digit can be discerned; 500 iterations gives much better quality.
+With the `--recover [N_ITER]` option, a convex optimization approach can be used to recover the underlying image (only for MNIST and CelebA as RGB isn't supported). Not that only MNIST is discernable for (24x32) as the downsampling is too severe and the content is too complex for other data. With 100 iterations, the digit can be discerned; 500 iterations gives much better quality.
 
 Perturbations can be applied to MNIST as in Section 5.1 (robustness to common image transformations): `--random_shift`, `--random_height`, `--random_rotate`, `--perspective`.
 
-For example, recover diffuser embeddings with heights between 15 and 20 cm:
+For example, recovering diffuser embeddings with heights between 15 and 20 cm:
 ```
 python scripts/simulate_examples.py --task mnist --recover 200 --cam diffuser --random_height 15 20
 ```
@@ -121,7 +121,7 @@ python scripts/create_mix_mask_dataset.py --n_mask 10 --learned
 ```
 Note that the paths to the end-to-end models needs to be specified in the script.
 
-Then to train a generator, the dataset should be specified with other training hyperparameters:
+Then to train a generator, the dataset should be specified with along with other training hyperparameters:
 ```
 python scripts/train_celeba_decoder.py \
 --dataset data/celeba_10_learned_mixed_mask_out768_offset100000_nfiles100000 \
