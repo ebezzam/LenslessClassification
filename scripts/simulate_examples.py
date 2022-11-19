@@ -10,7 +10,7 @@ import json
 import torch
 import torch.nn as nn
 from waveprop.devices import slm_dict, sensor_dict
-from lenslessclass.models import SLMMultiClassLogistic
+from lenslessclass.models import SLMClassifier
 from lenslessclass.util import lenless_recovery
 import click
 from lenslessclass.datasets import MNISTPropagated, CelebAPropagated, CIFAR10Propagated
@@ -379,7 +379,7 @@ def simulate_examples(
                     "multi_gpu": [0, 1] if metadata["model_param"]["multi_gpu"] else False,
                 }
             )
-            model = SLMMultiClassLogistic(**metadata["model_param"])
+            model = SLMClassifier(**metadata["model_param"])
             if use_cuda:
                 model = model.to(device)
 

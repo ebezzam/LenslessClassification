@@ -7,7 +7,7 @@ Overview: https://viso.ai/deep-learning/vgg-very-deep-convolutional-networks/
 
 
 """
-import torch
+
 import torch.nn as nn
 
 
@@ -104,13 +104,3 @@ class VGG(nn.Module):
 
     def name(self):
         return f"{self.vgg_name}"
-
-
-def test():
-    net = VGG("VGG11")
-    x = torch.randn(2, 3, 32, 32)
-    y = net(x)
-    print(y.size())
-
-
-# test()

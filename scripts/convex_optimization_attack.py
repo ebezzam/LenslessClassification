@@ -8,7 +8,7 @@ import pathlib as plib
 import torch
 import torch.nn as nn
 from waveprop.devices import slm_dict, sensor_dict, SensorParam
-from lenslessclass.models import SLMMultiClassLogistic
+from lenslessclass.models import SLMClassifier
 from lensless.util import resize
 import random
 import glob
@@ -147,7 +147,7 @@ def cvx_recovery(
         print("CUDA not available, using CPU.")
 
     # create a random PSF
-    model = SLMMultiClassLogistic(
+    model = SLMClassifier(
         input_shape=sensor_size,
         slm_config=slm_dict[mask],
         sensor_config=sensor_param,

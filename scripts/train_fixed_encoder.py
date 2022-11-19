@@ -2,7 +2,7 @@ from lenslessclass.models import (
     BinaryLogistic,
     MultiClassLogistic,
     SingleHidden,
-    DeepBig,
+    FullyConnected,
     CNN,
     CNNLite,
 )
@@ -49,9 +49,9 @@ import pandas as pd
     default="mnist",
 )
 @click.option("--lr", type=float, help="Learning rate.", default=0.001)
-@click.option("--n_epoch", type=int, help="Number of epochs to train.", default=10)
+@click.option("--n_epoch", type=int, help="Number of epochs to train.", default=50)
 @click.option("--seed", type=int, help="Random seed.", default=0)
-@click.option("--batch_size", type=int, help="Batch size.", default=100)
+@click.option("--batch_size", type=int, help="Batch size.", default=32)
 @click.option(
     "--opti",
     type=click.Choice(["sgd", "adam"], case_sensitive=False),
@@ -79,7 +79,7 @@ import pandas as pd
     "--mask2sensor", type=float, default=0.004, help="SLM/mask to sensor distance in meters."
 )
 @click.option(
-    "--down_psf", type=float, help="Factor by which to downsample convolution.", default=2
+    "--down_psf", type=float, help="Factor by which to downsample convolution.", default=8
 )
 @click.option("--object_height", type=float, default=0.12, help="Object height in meters.")
 @click.option(
@@ -104,7 +104,7 @@ import pandas as pd
 )
 @click.option(
     "--noise_type",
-    default=None,
+    default="poisson",
     type=click.Choice(["speckle", "gaussian", "s&p", "poisson"]),
     help="Noise type to add.",
 )
@@ -691,33 +691,40 @@ def train_fixed_encoder(
     if vgg:
         model = VGG(vgg, input_shape=output_dim)
     elif deepbig:
-        model = DeepBig(input_shape=output_dim, n_class=n_class, dropout=dropout)
+        model = FullyConnected(input_shape=output_dim, n_class=n_class, dropout=dropout)
+    elif len(hidden) > 1:
+        model = FullyConnected(
+            input_shape=output_dim, hidden_dim=hidden, n_class=n_class, dropout=dropout
+        )
     elif cnn_lite:
         assert len(hidden) == 1
         model = CNNLite(
-            input_shape=output_dim[1:],
+            input_shape=output_dim,
             n_kern=cnn_lite,
-            kernel_size=kernel_size,
-            n_class=n_class,
             hidden=hidden[0],
+            n_class=n_class,
             pool=pool,
+            kernel_size=kernel_size,
+            bn=not no_bn,
+            dropout=dropout,
+        )
+    elif len(hidden) == 1:
+        model = SingleHidden(
+            input_shape=output_dim,
+            hidden_dim=hidden[0],
+            n_class=n_class,
             dropout=dropout,
             bn=not no_bn,
         )
-    elif hidden:
-        if len(hidden) == 1:
-            model = SingleHidden(
-                input_shape=output_dim,
-                hidden_dim=hidden[0],
-                n_class=n_class,
-                dropout=dropout,
-                bn=not no_bn,
-            )
-        else:
-            model = DeepBig(input_shape=output_dim, hidden_dim=hidden, n_class=n_class)
     elif cnn:
         model = CNN(
-            input_shape=output_dim, n_kern=cnn, n_class=n_class, pool=pool, kernel_size=kernel_size
+            input_shape=output_dim,
+            n_kern=cnn,
+            n_class=n_class,
+            pool=pool,
+            kernel_size=kernel_size,
+            bn=not no_bn,
+            dropout=dropout,
         )
     else:
         if n_class > 1:
@@ -742,8 +749,6 @@ def train_fixed_encoder(
     if opti == "sgd":
         # https://github.com/kuangliu/pytorch-cifar/blob/49b7aa97b0c12fe0d4054e670403a16b6b834ddd/main.py#L87
         optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
-        # https://github.com/kuangliu/pytorch-cifar/blob/49b7aa97b0c12fe0d4054e670403a16b6b834ddd/main.py#L89
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
     elif opti == "adam":
         # same default params
         optimizer = optim.Adam(
@@ -754,7 +759,6 @@ def train_fixed_encoder(
             weight_decay=0,
             amsgrad=False,
         )
-        # scheduler = None
     else:
         raise ValueError("Invalid optimization approach.")
 

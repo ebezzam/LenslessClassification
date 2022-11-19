@@ -730,41 +730,6 @@ class CelebAPropagated(datasets.CelebA):
 
             self.conv_dim = conv_dim
 
-            # psf = load_psf(fp=psf_fp, single_psf=single_psf, dtype=dtype)
-
-            # if crop_psf:
-            #     # for compact support PSF like lens
-            #     # -- keep full convolution
-            #     self.conv_dim = np.array(psf.shape)
-
-            #     # -- crop PSF around peak
-            #     center = np.unravel_index(np.argmax(psf, axis=None), psf.shape)
-            #     top = int(center[0] - crop_psf / 2)
-            #     left = int(center[1] - crop_psf / 2)
-            #     psf = psf[top : top + crop_psf, left : left + crop_psf]
-
-            # else:
-            #     # for PSFs with large support, e.g. lensless
-            #     if downsample_psf:
-            #         psf = resize(psf, 1 / downsample_psf, interpolation=cv2.INTER_CUBIC).astype(
-            #             dtype
-            #         )
-            #         if single_psf:
-            #             # cv2 drops the last dimension when it's 1..
-            #             psf = psf[:, :, np.newaxis]
-            #     self.conv_dim = np.array(psf.shape)
-
-            # # reorder axis to [channels, width, height]
-            # if grayscale and not single_psf:
-            #     psf = rgb2gray(psf).astype(dtype)
-            #     psf = psf[np.newaxis, :, :]
-            #     self.conv_dim[2] = 1
-            # else:
-            #     psf = np.transpose(psf, (2, 0, 1))
-
-            # # cast as torch array
-            # psf = torch.tensor(psf, device=device_conv)
-
         else:
             # no PSF as we learn SLM. Simulate until mask
             # output dimensions is same as dimension (before) convolution

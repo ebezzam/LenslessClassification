@@ -206,7 +206,7 @@ class FC2PretrainedStyleGAN(nn.Module):
                 (f"relu{i+1}", nn.ReLU()),
             ]
         layers += [(f"linear{len(layer_dim)}", nn.Linear(layer_dim[-1], generator_latent_dim))]
-        self.linear_layers = nn.Sequential(OrderedDict(layers))
+        self.layers = nn.Sequential(OrderedDict(layers))
 
         # post-processing
         if output_dim is not None:
@@ -230,7 +230,7 @@ class FC2PretrainedStyleGAN(nn.Module):
 
     def forward(self, x):
         x = self.flatten(x)
-        x = self.linear_layers(x)
+        x = self.layers(x)
         x = self.generator(x, self.label)
 
         # rescale from [-1, 1] to [0, 1]

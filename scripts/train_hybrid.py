@@ -6,7 +6,7 @@ Train SLM as well as digital classifier.
 """
 
 from collections import OrderedDict
-from lenslessclass.models import SLMMultiClassLogistic
+from lenslessclass.models import SLMClassifier
 import torch
 import random
 from pprint import pprint
@@ -73,8 +73,8 @@ from torch.utils.data import Subset
 @click.option("--object_height", type=float, default=0.12, help="Object height in meters.")
 @click.option("--lr", type=float, help="Learning rate.", default=None)
 @click.option("--momentum", type=float, help="Momentum for SGD.", default=0.01)
-@click.option("--n_epoch", type=int, help="Number of epochs to train.", default=10)
-@click.option("--batch_size", type=int, help="Batch size.", default=30)
+@click.option("--n_epoch", type=int, help="Number of epochs to train.", default=50)
+@click.option("--batch_size", type=int, help="Batch size.", default=32)
 @click.option(
     "--print_epoch",
     type=int,
@@ -629,7 +629,7 @@ def train_hybrid(
     print("==>>> total testing batch number: {}".format(len(test_loader)))
 
     # define model
-    model = SLMMultiClassLogistic(
+    model = SLMClassifier(
         input_shape=input_shape,
         slm_config=slm_dict[slm],
         sensor_config=sensor_param,
@@ -683,7 +683,6 @@ def train_hybrid(
         model._psf = model._psf.detach()
 
     # set optimizer
-    # TODO : set different learning rates: https://pytorch.org/docs/stable/optim.html
     if opti == "sgd":
         if lr is None:
             lr = 0.01

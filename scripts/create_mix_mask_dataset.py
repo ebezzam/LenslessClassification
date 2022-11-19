@@ -3,7 +3,7 @@ import pathlib as plib
 import torch
 import random
 import torch.nn as nn
-from lenslessclass.models import SLMMultiClassLogistic
+from lenslessclass.models import SLMClassifier
 from lenslessclass.datasets import CelebAPropagated
 import json
 import time
@@ -99,7 +99,7 @@ def create_dataset(n_mask, learned, output_dir, n_files):
             np.random.seed(i)
 
             # create mask using hybrid model
-            model = SLMMultiClassLogistic(
+            model = SLMClassifier(
                 input_shape=sensor_size,
                 slm_config=slm_dict[slm],
                 sensor_config=sensor_param,
@@ -183,7 +183,7 @@ def create_dataset(n_mask, learned, output_dir, n_files):
 
             mask2sensor = metadata["model_param"]["mask2sensor"]
 
-            model = SLMMultiClassLogistic(**metadata["model_param"])
+            model = SLMClassifier(**metadata["model_param"])
 
             # -- load from state dict
             state_dict_fp = str(_path / "state_dict.pth")

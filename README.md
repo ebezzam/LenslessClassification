@@ -22,7 +22,7 @@ nvcc --version
 ```
 And find the appropriate installation command [here](https://pytorch.org/).
 
-**Put `model` and `data` directories at the repository root!**
+**Put `model` and `data` directories at the repository root!** The [CelebA](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html) dataset should also be downloaded. The original MNIST and CIFAR10 datasets are downloaded by the scripts.
 
 ## PSFs <a name="psfs"></a>
 

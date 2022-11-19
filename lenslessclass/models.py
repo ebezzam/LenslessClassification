@@ -14,25 +14,18 @@ from lensless.constants import RPI_HQ_CAMERA_BLACK_LEVEL
 from skimage.util.noise import random_noise
 from scipy import ndimage
 from lenslessclass.util import AddPoissonNoise
-from waveprop.devices import SLMOptions, SensorOptions, slm_dict, sensor_dict, SensorParam
+from waveprop.devices import SensorParam
 from collections import OrderedDict
 import cv2
 from lenslessclass.vgg import VGG
 
 
 class MultiClassLogistic(nn.Module):
-    """
-    Example: https://gist.github.com/xmfbit/b27cdbff68870418bdb8cefa86a2d558
-    """
-
-    def __init__(self, input_shape, multi_gpu=False, n_class=10):
+    def __init__(self, input_shape, n_class=10):
         super(MultiClassLogistic, self).__init__()
         self.flatten = nn.Flatten()
         self.linear1 = nn.Linear(int(np.prod(input_shape)), n_class)
         self.decision = nn.Softmax(dim=1)
-
-        if multi_gpu:
-            self.linear1 = nn.DataParallel(self.linear1, device_ids=multi_gpu)
 
     def forward(self, x):
         x = self.flatten(x)
@@ -60,10 +53,6 @@ class BinaryLogistic(nn.Module):
 
 
 class SingleHidden(nn.Module):
-    """
-    Example: https://gist.github.com/xmfbit/b27cdbff68870418bdb8cefa86a2d558
-    """
-
     def __init__(self, input_shape, hidden_dim, n_class, bn=True, dropout=None):
         assert isinstance(hidden_dim, int)
         self.hidden_dim = hidden_dim
@@ -71,7 +60,7 @@ class SingleHidden(nn.Module):
         self.flatten = nn.Flatten()
         if bn:
             self.linear1 = nn.Linear(int(np.prod(input_shape)), hidden_dim, bias=False)
-            self.bn1 = nn.BatchNorm1d(hidden_dim)  # ADDED to be consistent with SLM
+            self.bn1 = nn.BatchNorm1d(hidden_dim)
         else:
             self.linear1 = nn.Linear(int(np.prod(input_shape)), hidden_dim, bias=True)
             self.bn1 = None
@@ -93,7 +82,7 @@ class SingleHidden(nn.Module):
     def forward(self, x):
         x = self.flatten(x)
         if self.bn1 is not None:
-            x = self.activation1(self.bn1(self.linear1(x)))  # ADDED to be consistent with SLM
+            x = self.activation1(self.bn1(self.linear1(x)))
         else:
             x = self.activation1(self.linear1(x))
         if self.dropout is not None:
@@ -104,28 +93,48 @@ class SingleHidden(nn.Module):
 
     def name(self):
         model_name = f"SingleHidden{self.hidden_dim}"
+        if self.bn1 is not None:
+            model_name += f"_bn"
         if self.dropout:
-            model_name += f"drop{self.dropout_rate}"
+            model_name += f"_drop{self.dropout_rate}"
         return model_name
 
 
-class TwoHidden(nn.Module):
+class FullyConnected(nn.Module):
     """
-    Example: https://gist.github.com/xmfbit/b27cdbff68870418bdb8cefa86a2d558
+    Default to 6-layer from this paper: https://arxiv.org/abs/1003.0358
     """
 
-    def __init__(self, input_shape, hidden_dim, hidden_dim_2, n_class):
-        assert isinstance(hidden_dim, int)
-        self.hidden_dim = hidden_dim
-        self.hidden_dim_2 = hidden_dim_2
-        super(TwoHidden, self).__init__()
+    def __init__(self, input_shape, n_class, hidden_dim=None, dropout=None, bn=True):
+        super(FullyConnected, self).__init__()
         self.flatten = nn.Flatten()
-        self.linear1 = nn.Linear(int(np.prod(input_shape)), hidden_dim, bias=False)
-        self.bn1 = nn.BatchNorm1d(hidden_dim)  # ADDED to be consistent with SLM
-        self.linear2 = nn.Linear(hidden_dim, hidden_dim_2, bias=False)
-        self.bn2 = nn.BatchNorm1d(hidden_dim_2)  # ADDED to be consistent with SLM
-        self.activation = nn.ReLU()
-        self.linear3 = nn.Linear(hidden_dim_2, n_class)
+
+        if hidden_dim is None:
+            hidden_dim = [2500, 2000, 1500, 1000, 500]
+
+        layer_dim = [int(np.prod(input_shape))] + hidden_dim
+        self.n_layers = len(layer_dim)
+        self.dropout = dropout
+        self.bn = bn
+
+        layers = []
+        for i in range(len(layer_dim) - 1):
+            if bn:
+                layers += [
+                    (f"linear{i+1}", nn.Linear(layer_dim[i], layer_dim[i + 1], bias=False)),
+                    (f"bn{i+1}", nn.BatchNorm1d(layer_dim[i + 1])),
+                ]
+            else:
+                layers += [
+                    (f"linear{i+1}", nn.Linear(layer_dim[i], layer_dim[i + 1], bias=True)),
+                ]
+            layers += [(f"relu{i+1}", nn.ReLU())]
+            if dropout is not None:
+                layers += [
+                    (f"dropout{i+1}", nn.Dropout(p=dropout)),
+                ]
+        layers += [(f"linear{len(layer_dim)}", nn.Linear(layer_dim[-1], n_class))]
+        self.layers = nn.Sequential(OrderedDict(layers))
         if n_class > 1:
             self.decision = nn.Softmax(dim=1)
         else:
@@ -133,14 +142,17 @@ class TwoHidden(nn.Module):
 
     def forward(self, x):
         x = self.flatten(x)
-        x = self.activation(self.bn1(self.linear1(x)))  # ADDED to be consistent with SLM
-        x = self.activation(self.bn2(self.linear2(x)))
-        x = self.linear3(x)
+        x = self.layers(x)
         logits = self.decision(x)
         return logits
 
     def name(self):
-        return f"TwoHidden{self.hidden_dim}_{self.hidden_dim_2}"
+        model_name = f"FullyConnected{self.n_layers}"
+        if self.bn:
+            model_name = model_name + f"_bn"
+        if self.dropout:
+            model_name += f"_drop{self.dropout_rate}"
+        return model_name
 
 
 def conv_output_dim(input_dim, kernel, padding=0, stride=1, pooling=1):
@@ -155,6 +167,8 @@ def conv_output_dim(input_dim, kernel, padding=0, stride=1, pooling=1):
         stride = [stride, stride]
     if isinstance(pooling, int):
         pooling = [pooling, pooling]
+    if len(input_dim) == 3:
+        input_dim = input_dim[1:]
     output_dim = (np.array(input_dim) - np.array(kernel) + 2 * np.array(padding)) / stride + 1
     return (output_dim // pooling).astype(np.int)
 
@@ -175,44 +189,42 @@ class CNNLite(nn.Module):
         Single convolution layer -> flatten > fully connected > softmax
         """
 
-        assert len(input_shape) == 2
-
         super().__init__()
         self.n_kern = n_kern
         self.kernel_size = kernel_size
         self.pool = pool
         self.hidden = hidden
+        self.dropout = dropout
+        self.bn = bn
 
-        self.conv = nn.Conv2d(1, self.n_kern, self.kernel_size)
+        conv_layer = [
+            nn.Conv2d(input_shape[0], self.n_kern, self.kernel_size),
+            nn.ReLU(inplace=True),
+        ]
+        if self.pool > 1:
+            conv_layer += [nn.MaxPool2d(kernel_size=(self.pool, self.pool))]
+        self.conv_layer = nn.Sequential(*conv_layer)
+
         output_dim = conv_output_dim(
             input_shape,
             kernel=kernel_size,
             pooling=self.pool,
         )
 
-        if hidden:
-            if bn:
-                self.fc1 = nn.Linear(self.n_kern * np.prod(output_dim), self.hidden, bias=False)
-                self.bn1 = nn.BatchNorm1d(self.hidden)
-            else:
-                self.fc1 = nn.Linear(self.n_kern * np.prod(output_dim), self.hidden)
-                self.bn1 = None
-            self.fc2 = nn.Linear(self.hidden, n_class)
-        else:
-            self.fc1 = nn.Linear(self.n_kern * np.prod(output_dim), n_class)
-            # if bn:
-            #     self.fc1 = nn.Linear(self.n_kern * np.prod(output_dim), n_class, bias=False)
-            #     self.bn1 = nn.BatchNorm1d(self.hidden)
-            # else:
-            #     self.fc1 = nn.Linear(self.n_kern * np.prod(output_dim), n_class)
-            #     self.bn1 = None
-
+        fully_connected = []
         if dropout:
-            self.dropout_rate = dropout
-            self.dropout = nn.Dropout(dropout)
+            fully_connected += [n.Dropout(p=dropout)]
+        if bn:
+            fully_connected += [
+                nn.Linear(self.n_kern * np.prod(output_dim), self.hidden, bias=False),
+                nn.BatchNorm1d(self.hidden),
+            ]
         else:
-            self.dropout_rate = None
-            self.dropout = None
+            fully_connected = [nn.Linear(self.n_kern * np.prod(output_dim), self.hidden, bias=True)]
+        if dropout:
+            fully_connected += [n.Dropout(p=dropout)]
+        fully_connected += [nn.Linear(self.hidden, n_class)]
+        self.fully_connected = nn.Sequential(*fully_connected)
 
         if n_class > 1:
             self.decision = nn.Softmax(dim=1)
@@ -221,30 +233,17 @@ class CNNLite(nn.Module):
 
     def forward(self, x):
 
-        # Max pooling
-        x = F.relu(self.conv(x))
-        if self.pool > 1:
-            x = F.max_pool2d(x, (self.pool, self.pool))
-        x = torch.flatten(x, 1)  # flatten all dimensions except the batch dimension
-        if self.dropout:
-            x = self.dropout(x)
-
-        if self.hidden:
-            if self.bn1 is not None:
-                x = F.relu(self.bn1(self.fc1(x)))
-            else:
-                x = F.relu(self.fc1(x))
-            if self.dropout:
-                x = self.dropout(x)
-            x = self.fc2(x)
-        else:
-            x = self.fc1(x)
+        x = self.conv_layer(x)
+        x = torch.flatten(x, 1)
+        x = self.fully_connected(x)
         return self.decision(x)
 
     def name(self):
         model_name = f"CNNLite{self.n_kern}_FC{self.hidden}"
+        if self.bn:
+            model_name = model_name + f"_bn"
         if self.dropout:
-            model_name = model_name + f"_dropout{self.dropout_rate}"
+            model_name = model_name + f"_drop{self.dropout}"
         return model_name
 
 
@@ -254,103 +253,96 @@ class CNN(nn.Module):
     Example: https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html#define-a-convolutional-neural-network
     """
 
-    def __init__(self, input_shape, n_class, n_kern=6, bn=True, pool=2, kernel_size=3):
+    def __init__(
+        self,
+        input_shape,
+        n_class,
+        n_kern=6,
+        n_kern2=20,
+        bn=True,
+        pool=2,
+        kernel_size=3,
+        dropout=None,
+    ):
+        """
+        input_shape : array_like
+            [n_channels x height x width]
+
+        """
+
         super().__init__()
         self.n_kern = n_kern
-        self.n_kern2 = 20
+        self.n_kern2 = n_kern2
         self.pool = pool
-        kernel_size = kernel_size
-        # 1 input image channel, 6 output channels, kernelxkernel square convolution
-        # kernel
-        self.conv1 = nn.Conv2d(1, self.n_kern, kernel_size)
-        self.conv2 = nn.Conv2d(self.n_kern, self.n_kern2, kernel_size)
-        # an affine operation: y = Wx + b
+        self.bn = bn
+
+        # define convolution layers
+        conv_layers = [
+            nn.Conv2d(input_shape[0], self.n_kern, kernel_size),
+            nn.ReLU(inplace=True),
+        ]
+        if self.pool > 1:
+            conv_layers += [nn.MaxPool2d(kernel_size=(self.pool, self.pool))]
+        conv_layers += [
+            nn.Conv2d(self.n_kern, self.n_kern2, kernel_size),
+            nn.ReLU(inplace=True),
+        ]
+        if self.pool > 1:
+            conv_layers += [nn.MaxPool2d(kernel_size=(self.pool, self.pool))]
+        self.conv_layers = nn.Sequential(*conv_layers)
+
         output_dim = conv_output_dim(
             conv_output_dim(input_shape, kernel=kernel_size, pooling=self.pool),
             kernel=kernel_size,
             pooling=self.pool,
         )
-        if bn:
-            self.fc1 = nn.Linear(self.n_kern2 * np.prod(output_dim), 120, bias=False)
-            self.bn1 = nn.BatchNorm1d(120)
-        else:
-            self.fc1 = nn.Linear(self.n_kern2 * np.prod(output_dim), 120)
-            self.bn1 = None
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, n_class)
-        if n_class > 1:
-            self.decision = nn.Softmax(dim=1)
-        else:
-            self.decision = nn.Sigmoid()
-
-    def forward(self, x):
-
-        # Max pooling
-        x = F.relu(self.conv1(x))
-        if self.pool > 1:
-            x = F.max_pool2d(x, (self.pool, self.pool))
-        x = F.relu(self.conv2(x))
-        if self.pool > 1:
-            x = F.max_pool2d(x, (self.pool, self.pool))
-        x = torch.flatten(x, 1)  # flatten all dimensions except the batch dimension
-        if self.bn1 is not None:
-            x = F.relu(self.bn1(self.fc1(x)))
-        else:
-            x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        logits = self.decision(x)
-        return logits
-
-    def name(self):
-        return f"CNN{self.n_kern}_{self.n_kern2}"
-
-
-class DeepBig(nn.Module):
-    """
-    Default to 6-layer from this paper: https://arxiv.org/abs/1003.0358
-    """
-
-    def __init__(self, input_shape, n_class, hidden_dim=None, dropout=None):
-        super(DeepBig, self).__init__()
-        self.flatten = nn.Flatten()
-
-        if hidden_dim is None:
-            # hidden_dim = [2500, 2000, 1500, 1000, 500]
-            hidden_dim = [1122, 800]
-
-        layer_dim = [int(np.prod(input_shape))] + hidden_dim
-        self.n_layers = len(layer_dim)
+        self.hidden = [self.n_kern2 * np.prod(output_dim), 120, 84]
 
         layers = []
-        for i in range(len(layer_dim) - 1):
-            layers += [
-                (f"linear{i+1}", nn.Linear(layer_dim[i], layer_dim[i + 1], bias=False)),
-                (f"bn{i+1}", nn.BatchNorm1d(layer_dim[i + 1])),
-                (f"relu{i+1}", nn.ReLU()),
-            ]
+        for i in range(len(self.hidden) - 1):
+
+            if bn:
+                layers += [
+                    (f"linear{i+1}", nn.Linear(self.hidden[i], self.hidden[i + 1], bias=False)),
+                    (f"bn{i+1}", nn.BatchNorm1d(self.hidden[i + 1])),
+                ]
+            else:
+                layers += [
+                    (f"linear{i+1}", nn.Linear(self.hidden[i], self.hidden[i + 1], bias=True)),
+                ]
+
+            layers += [(f"relu{i+1}", nn.ReLU())]
+
             if dropout is not None:
                 layers += [
                     (f"dropout{i+1}", nn.Dropout(p=dropout)),
                 ]
-        layers += [(f"linear{len(layer_dim)}", nn.Linear(layer_dim[-1], n_class))]
-        self.linear_layers = nn.Sequential(OrderedDict(layers))
+
+        layers += [(f"linear{len(self.hidden)}", nn.Linear(self.hidden[-1], n_class))]
+        self.layers = nn.Sequential(OrderedDict(layers))
+
         if n_class > 1:
             self.decision = nn.Softmax(dim=1)
         else:
             self.decision = nn.Sigmoid()
 
     def forward(self, x):
-        x = self.flatten(x)
-        x = self.linear_layers(x)
-        logits = self.decision(x)
-        return logits
+
+        x = self.conv_layers(x)
+        x = torch.flatten(x, 1)
+        x = self.layers(x)
+        return self.decision(x)
 
     def name(self):
-        return f"DeepBig{self.n_layers}"
+        model_name = f"CNN{self.n_kern}_{self.n_kern2}"
+        if self.bn:
+            model_name = model_name + f"_bn"
+        if self.dropout:
+            model_name = model_name + f"_drop{self.dropout}"
+        return model_name
 
 
-class SLMMultiClassLogistic(nn.Module):
+class SLMClassifier(nn.Module):
     """ """
 
     def __init__(
@@ -393,7 +385,7 @@ class SLMMultiClassLogistic(nn.Module):
         grayscale : whether input is grayscale, can then simplify to just grayscale PSF
 
         """
-        super(SLMMultiClassLogistic, self).__init__()
+        super(SLMClassifier, self).__init__()
 
         assert n_class > 0
         if dtype == torch.float32:
@@ -405,6 +397,7 @@ class SLMMultiClassLogistic(nn.Module):
 
         if len(input_shape) == 2:
             input_shape = [1] + list(input_shape)
+        assert len(input_shape) == 3
 
         # store configuration
         self.input_shape = np.array(input_shape)
@@ -531,8 +524,10 @@ class SLMMultiClassLogistic(nn.Module):
         self.classifier = None
         self.vgg = vgg
         if vgg:
+            assert self.n_slm_mask == 1, "Not supported for multiple masks"
             self.classifier = VGG(vgg, input_shape=np.roll(self.output_dim, shift=1))
         elif cnn_lite:
+            assert self.n_slm_mask == 1, "Not supported for multiple masks"
             self.classifier = CNNLite(
                 input_shape=self.output_dim,
                 n_kern=cnn_lite,
@@ -543,6 +538,7 @@ class SLMMultiClassLogistic(nn.Module):
                 dropout=dropout,
             )
         elif n_kern:
+            assert self.n_slm_mask == 1, "Not supported for multiple masks"
             self.classifier = CNN(
                 input_shape=self.output_dim,
                 n_class=n_class,
@@ -552,39 +548,18 @@ class SLMMultiClassLogistic(nn.Module):
                 pool=pool,
             )
         elif self.hidden2 is not None:
+
+            _in_shape = [self.n_slm_mask * input_shape[0]] + list(output_dim)
+
             assert self.hidden is not None
-            if bn:
-                self.linear_layers = nn.Sequential(
-                    OrderedDict(
-                        [
-                            (
-                                "linear1",
-                                nn.Linear(self.n_slm_mask * self.n_hidden, self.hidden, bias=False),
-                            ),
-                            ("bn", nn.BatchNorm1d(self.hidden)),
-                            ("relu1", nn.ReLU()),
-                            ("linear2", nn.Linear(self.hidden, self.hidden2, bias=False)),
-                            ("bn2", nn.BatchNorm1d(self.hidden2)),
-                            ("relu2", nn.ReLU()),
-                            ("linear3", nn.Linear(self.hidden2, n_class)),
-                        ]
-                    )
-                )
-            else:
-                self.linear_layers = nn.Sequential(
-                    OrderedDict(
-                        [
-                            (
-                                "linear1",
-                                nn.Linear(self.n_slm_mask * self.n_hidden, self.hidden, bias=True),
-                            ),
-                            ("relu1", nn.ReLU()),
-                            ("linear2", nn.Linear(self.hidden, self.hidden2, bias=True)),
-                            ("relu2", nn.ReLU()),
-                            ("linear3", nn.Linear(self.hidden2, n_class)),
-                        ]
-                    )
-                )
+            self.classifier = FullyConnected(
+                input_shape=_in_shape,
+                n_class=n_class,
+                hidden_dim=[self.hidden, self.hidden2],
+                dropout=dropout,
+                bn=bn,
+            )
+
         else:
             self.bn = None
             if self.hidden is not None and self.hidden:
@@ -601,7 +576,6 @@ class SLMMultiClassLogistic(nn.Module):
             else:
                 self.linear1 = nn.Linear(self.n_slm_mask * self.n_hidden, n_class)
                 self.linear2 = None
-            self.linear_layers = None
 
         if n_class > 1:
             self.decision = nn.Softmax(dim=1)
@@ -694,10 +668,7 @@ class SLMMultiClassLogistic(nn.Module):
         if multi_gpu:
             self.downsample = nn.DataParallel(self.downsample, device_ids=multi_gpu)
             if self.classifier is not None:
-                # CNN classifier
                 self.classifier = nn.DataParallel(self.classifier, device_ids=multi_gpu)
-            elif self.linear_layers is not None:
-                self.linear_layers = nn.DataParallel(self.linear_layers, device_ids=multi_gpu)
             else:
                 self.conv_bn = nn.DataParallel(self.conv_bn, device_ids=multi_gpu)
                 self.linear1 = nn.DataParallel(self.linear1, device_ids=multi_gpu)
@@ -722,14 +693,6 @@ class SLMMultiClassLogistic(nn.Module):
             slm_vals = [self.slm_vals[i].clamp(min=0, max=1) for i in range(self.n_slm_mask)]
 
         return slm_vals
-
-        # with torch.no_grad():
-        #     if self.n_slm_mask == 1:
-        #         self.slm_vals.clamp_(min=0, max=1)
-        #     else:
-        #         slm_vals = [self.slm_vals[i].clamp_(min=0, max=1) for i in range(self.n_slm_mask)]
-
-        # return self.slm_vals
 
     def set_slm_vals(self, slm_vals):
         """
@@ -818,12 +781,11 @@ class SLMMultiClassLogistic(nn.Module):
 
         # -- digital decision network after sensor
         if self.classifier is not None:
-            assert self.n_slm_mask == 1, "Not supported for multiple masks"
             logits = self.classifier(x)
         else:
             x = self.flatten(x)
-            if self.linear_layers is not None:
-                x = self.linear_layers(x)
+            if self.layers is not None:
+                x = self.layers(x)
             else:
                 x = self.linear1(x)
                 if self.dropout is not None:
@@ -981,9 +943,9 @@ class SLMMultiClassLogistic(nn.Module):
             return f"{_name}_{self.vgg}"
         elif self.n_kern:
             return f"{_name}_CNN_{self.n_kern}"
+        elif self.hidden2:
+            return f"{_name}_FullyConnected_{self.hidden}_{self.hidden2}"
         elif self.hidden:
             return f"{_name}_SingleHidden{self.hidden}"
-        elif self.hidden2:
-            return f"{_name}_fully_connected_{self.hidden}_{self.hidden2}"
         else:
             return f"{_name}_MultiClassLogistic"
