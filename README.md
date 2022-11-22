@@ -1,4 +1,4 @@
-# LenslessClassification
+# Lensless Classification
 
 Code for the paper "Privacy-Enhancing Optical Embeddings for Lensless Classification".
 
@@ -44,7 +44,7 @@ The simulated PSFs (Coded aperture and Fixed mask (s)) are already in this folde
 
 ## End-to-end training <a name="e2e"></a>
 
-*Note that in the following bash scripts, different section (at the top) need to commented/uncommented as we use different hyperparameters depending on the camera.*
+*Note that in the following bash scripts, different sections (at the top) need to commented/uncommented as we use different hyperparameters depending on the camera.*
 
 The following script can be used to run the experiments of Section 5.1 (varying embedding dimension). 
 ```
