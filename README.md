@@ -22,7 +22,12 @@ nvcc --version
 ```
 And find the appropriate installation command [here](https://pytorch.org/).
 
-**Put `model` and `data` directories at the repository root!** The [CelebA](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html) dataset should also be downloaded. The original MNIST and CIFAR10 datasets are downloaded by the scripts.
+We provide our trained models at this [link](https://drive.google.com/file/d/1INX8eYtsNa1z8htH2IgB6tf2yuv2GPqs/view?usp=share_link). Place the `models` directory at the root of this repository so that they can be properly loaded by the various scripts. 
+
+### Data
+
+Note we do not provided the augmented datasets as they can be generated when running the training scripts (`scripts/train_fixed_encoder.py` and `scripts/train_hybrid.py`). These scripts will download the original MNIST and CIFAR10 datasets to `data` if they do not already exist locally. The [CelebA](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html) dataset should be downloaded manually. Consequently, the script will simulate the corresponding embedding dataset if it does not exist already.
+
 
 ## PSFs <a name="psfs"></a>
 
