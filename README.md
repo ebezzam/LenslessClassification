@@ -22,11 +22,15 @@ nvcc --version
 ```
 And find the appropriate installation command [here](https://pytorch.org/).
 
-We provide our trained models at this [link](https://drive.google.com/file/d/1INX8eYtsNa1z8htH2IgB6tf2yuv2GPqs/view?usp=share_link). Place the `models` directory at the root of this repository so that they can be properly loaded by the various scripts. 
+There is also an [environment.yml](https://github.com/ebezzam/LenslessClassification/blob/main/environment.yml) file.
+
+We provide our trained models at this [link](https://drive.google.com/file/d/1INX8eYtsNa1z8htH2IgB6tf2yuv2GPqs/view?usp=share_link). Place the `models` directory at the root of this repository so that they can be properly loaded by the various scripts/notebooks. 
 
 ### Data
 
-Note we do not provided the augmented datasets as they can be generated when running the training scripts (`scripts/train_fixed_encoder.py` and `scripts/train_hybrid.py`). These scripts will download the original MNIST and CIFAR10 datasets to `data` if they do not already exist locally. The [CelebA](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html) dataset should be downloaded manually. Consequently, the script will simulate the corresponding embedding dataset if it does not exist already.
+Note we do not provided the augmented datasets as they can be generated when running the training scripts (`scripts/train_fixed_encoder.py` and `scripts/train_hybrid.py`). These scripts will download the original MNIST and CIFAR10 datasets to `data` if they do not already exist locally, and will simulate the corresponding embedding dataset if it does not exist already. 
+
+Note that the original [CelebA](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html) dataset should be downloaded manually.
 
 
 ## PSFs <a name="psfs"></a>
@@ -34,13 +38,13 @@ Note we do not provided the augmented datasets as they can be generated when run
 All fixed PSFs can be found in `psfs`.
 
 The simulated PSFs (Coded aperture and Fixed mask (s)) are already in this folder. New ones can be simulated in the following notebook:
-- Coded aperture: [`notebook/simulate_coded_aperture_psf.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/simulate_coded_aperture_psf.ipynb) for generating coded aperture mask and PSF as in FlatCam paper.
+- Coded aperture: [`notebook/simulate_coded_aperture_psf.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/simulate_coded_aperture_psf.ipynb) for generating coded aperture mask and PSF as in the [FlatCam paper](https://arxiv.org/abs/1509.00116).
 - Fixed mask (s): [`notebooks/simulate_fixed_mask_psf.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/simulate_fixed_mask_psf.ipynb) for generating mask and simulated PSF for proposed system.
 
 
 ## End-to-end training <a name="e2e"></a>
 
-In the following bash scripts, the variable `N_FILES` can be used to run approaches on a small set of files. Set it to `0` to run on all files. *Note that different section need to commented/uncommented as we use different hyperparameters depending on the camera.*
+*Note that in the following bash scripts, different section (at the top) need to commented/uncommented as we use different hyperparameters depending on the camera.*
 
 The following script can be used to run the experiments of Section 5.1 (varying embedding dimension). 
 ```
@@ -69,9 +73,11 @@ All bash scripts make use of the two training scripts:
 
 These Python scripts are called with user-defined parameters that need to be set accordingly for each experiment.
 
+The variable `N_FILES` can be used to run approaches on a small set of files. Set it to `0` to run on all files. 
+
 ## Simulating example embedddings <a name="examples"></a>
 
-To simulate and save as PNG embeddings of the different cameras, the following script can be used:
+To simulate the embeddings of the different cameras and save them as PNGs, the following script can be used:
 ```
 python scripts/simulate_examples.py --task mnist --n_files 10
 ```
@@ -98,9 +104,11 @@ python scripts/simulate_examples.py --task mnist --recover 200 --cam diffuser --
 
 ## Defense to adversarial attacks <a name="defense"></a>
 
+These scripts are used to generate the results for Section 5.4 (Defense against leaks and plaintext attacks).
+
 ### Convex optimization-based
 
-For convex optimization-based attack (inverse problem formulation), the following command will apply the attack to a set of CelebA files (defined by command line):
+For convex optimization-based attacks (inverse problem formulation), the following command will apply the attack to a set of CelebA files:
 ```
 # with knowledge of the mask
 python scripts/convex_optimization_attack.py \
@@ -126,7 +134,7 @@ python scripts/create_mix_mask_dataset.py --n_mask 10 --learned
 ```
 Note that the paths to the end-to-end models needs to be specified in the script.
 
-Then to train a generator, the dataset should be specified with along with other training hyperparameters:
+Then to train a generator, the dataset should be specified along with other training hyperparameters:
 ```
 python scripts/train_celeba_decoder.py \
 --dataset data/celeba_10_learned_mixed_mask_out768_offset100000_nfiles100000 \
@@ -154,6 +162,6 @@ In the `notebooks` folder:
 - [`2_celeba.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/2_celeba.ipynb): compare performance of different cameras and dimensions on face attribute classification (CelebA).
 - [`3_cifar10.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/3_cifar10.ipynb): compare performance of different cameras and dimensions on RGB object classification (CIFAR10).
 - [`4_convex_optimization_attack.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/4_convex_optimization_attack.ipynb): visualize examples of convex optimization-based attack.
-- [`5_plaintext_generator.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/5_plaintext_generator.ipynb): compare performance when varying number of plaintext attacks and number of varying masks.
+- [`5_plaintext_generator.ipynb`](https://github.com/ebezzam/LenslessClassification/blob/main/notebooks/5_plaintext_generator.ipynb): compare decoder performance when varying number of plaintext attacks and number of varying masks.
 
 
