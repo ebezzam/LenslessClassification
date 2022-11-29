@@ -1,6 +1,6 @@
 # Lensless Classification
 
-Code for the paper "Privacy-Enhancing Optical Embeddings for Lensless Classification".
+Code for the paper ["Privacy-Enhancing Optical Embeddings for Lensless Classification"](https://arxiv.org/abs/2211.12864) by Eric Bezzam, Martin Vetterli, and Matthieu Simeoni.
 
 - [Setup](#setup).
 - [Point spread functions](#psfs).
