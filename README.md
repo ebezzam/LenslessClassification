@@ -153,6 +153,10 @@ python scripts/generate_celeba_examples.py
 ```
 Note that trained generators are specified in the script.
 
+For classification from the plaintext attacks, the following bash script can be used to reproduce the results in the paper (Figure 10):
+```
+./plaintext_class.sh
+```
 
 ## Notebooks to visualize results <a name="viz"></a>
 
