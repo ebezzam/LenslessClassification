@@ -126,6 +126,11 @@ The following bash script can be used to reproduce the results in the paper (Tab
 ./convex_opt_attack.sh
 ```
 
+To detect faces from the reconstructions (Table 4), the following script can be used:
+```
+python scripts/convex_opt_attack_detect_faces.py
+```
+
 ### Training a decoder
 
 For the generator-based attack, first a dataset from the multiple masks needs to be generated. For example, to generate a dataset from 10 learned PSFs:
@@ -153,9 +158,14 @@ python scripts/generate_celeba_examples.py
 ```
 Note that trained generators are specified in the script.
 
-For classification from the plaintext attacks, the following bash script can be used to reproduce the results in the paper (Figure 10):
+For classification from the plaintext attacks, the following bash script can be used to reproduce the results for the points in Figure 10:
 ```
 ./plaintext_class.sh
+```
+
+Figure 10 itself can be generated with the following script:
+```
+python scripts/privacy_plot.py
 ```
 
 ## Notebooks to visualize results <a name="viz"></a>
