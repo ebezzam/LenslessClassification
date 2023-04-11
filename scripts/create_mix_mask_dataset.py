@@ -37,9 +37,13 @@ models = model_dict["Gender"]["Learned mask"]["FCNN"]["24x32_multi"]
     type=int,
     help="Number of files to simulate.",
 )
-def create_dataset(n_mask, learned, output_dir, n_files):
-
-    OFFSET = 100000  # don't overlap with files used for training / testing
+@click.option(
+    "--offset",
+    default=100000,   # don't overlap with files used for training / testing
+    type=int,
+)
+def create_dataset(n_mask, learned, output_dir, n_files, offset):
+ 
     print_progress = 1000
     CELEBA_DIR = "/scratch"
     PSF_OUTPUT_DIR = "psfs"
@@ -219,9 +223,9 @@ def create_dataset(n_mask, learned, output_dir, n_files):
 
     ## INITIALIZE OUTPUT FOLDER
     if not learned:
-        folder_name = f"celeba_{len(psfs)}_random_mixed_mask_nonlin{non_lin}_out{np.prod(output_dim)}_offset{OFFSET}_nfiles{n_files}"
+        folder_name = f"celeba_{len(psfs)}_random_mixed_mask_nonlin{non_lin}_out{np.prod(output_dim)}_offset{offset}_nfiles{n_files}"
     else:
-        folder_name = f"celeba_{len(psfs)}_learned_mixed_mask_out{np.prod(output_dim)}_offset{OFFSET}_nfiles{n_files}"
+        folder_name = f"celeba_{len(psfs)}_learned_mixed_mask_out{np.prod(output_dim)}_offset{offset}_nfiles{n_files}"
     output_dir = output_dir / plib.Path(folder_name)
     if not os.path.isdir(output_dir):
         output_dir.mkdir(exist_ok=True)
@@ -237,7 +241,7 @@ def create_dataset(n_mask, learned, output_dir, n_files):
         "mask2sensor": mask2sensor,
         "sensor": sensor,
         "object_height": object_height,
-        "offset": OFFSET,
+        "offset": offset,
         "n_files": n_files,
         "device_conv": device_conv,
         "crop_psf": False,
@@ -307,14 +311,14 @@ def create_dataset(n_mask, learned, output_dir, n_files):
 
         if i % print_progress == (print_progress - 1):
             proc_time = time.time() - start_time
-            print(f"{i + 1 - OFFSET} / {n_files} examples, {proc_time / 60} minutes")
+            print(f"{i + 1 - offset} / {n_files} examples, {proc_time / 60} minutes")
 
     start_time = time.time()
 
-    for i in range(OFFSET, OFFSET + n_complete):
+    for i in range(offset, offset + n_complete):
         label_fp = train_output / f"label{i}"
         train_labels.append(torch.load(label_fp))
-    for i in range(OFFSET + n_complete, OFFSET + n_files):
+    for i in range(offset + n_complete, offset + n_files):
         _simulate(i)
 
     with open(train_output / "labels.txt", "w") as f:
